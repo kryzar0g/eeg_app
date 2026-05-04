@@ -50,20 +50,9 @@ def run_online_mode() -> None:
 
 
 def run_gui_mode() -> None:
-  """Spustí jednoduché GUI pro výběr režimu a souboru."""
+  """Spustí grafické rozhraní – úlohy jsou spouštěny přímo uvnitř GUI."""
 
-  selection = run_gui()
-  if selection is None:
-    return
-
-  if selection.mode == Mode.RECORD.value:
-    run_record_mode()
-  elif selection.mode == Mode.OFFLINE.value:
-    if not selection.offline_file:
-      raise SystemExit("V režimu 'offline' musíte vybrat EEG soubor.")
-    run_offline_mode(selection.offline_file)
-  elif selection.mode == Mode.ONLINE.value:
-    run_online_mode()
+  run_gui()
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,8 +60,10 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "mode",
     type=str,
+    nargs="?",
     choices=[m.value for m in Mode],
-    help="Režim běhu aplikace",
+    default=Mode.GUI.value,
+    help="Režim běhu aplikace (výchozí: gui)",
   )
   parser.add_argument(
     "-f",
