@@ -8,7 +8,7 @@ from typing import Optional
 
 @dataclass
 class GuiSelection:
-  mode: str  # "record" nebo "offline"
+  mode: str  # "record", "offline" nebo "online"
   offline_file: Optional[str] = None
 
 
@@ -29,6 +29,7 @@ def _run_gui_dialog() -> Optional[GuiSelection]:
   ttk.Label(frame, text="Režim:").grid(row=0, column=0, sticky="w")
   modes = [
     ("Online/record (LSL paradigma)", "record"),
+    ("Online BCI (klasifikace v reálném čase)", "online"),
     ("Offline analýza z EDF/BDF", "offline"),
   ]
 

@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+.venv*/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Data and model files (large binary files)
+data/raw/
+data/processed/
+*.bdf
+*.edf
+*.fif
+
+# Logs
+logs/
+
+# Reports
+reports/

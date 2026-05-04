@@ -44,5 +44,5 @@ events:
   tmin: 0.0                 # začátek epochy relativně k markeru (s, pro mode="stim")
   tmax: 4.0                 # konec epochy relativně k markeru (s, pro mode="stim")
   # CSV s časovými intervaly (start_seconds; end_seconds; label) pro mode="csv"
-  timestamp_csv_path: "C:/Users/kryst/OneDrive/Documents/SKOLA/diplomka/zaruba/data_timestamps.csv"
+  timestamp_csv_path: "data/timestamps.csv"
   epoch_length: 4.0         # délka epochy v sekundách pro segmentaci intervalů
