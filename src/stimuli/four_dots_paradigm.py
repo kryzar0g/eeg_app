@@ -75,37 +75,37 @@ class FourDotsParadigm:
       # Baseline s fixačním bodem
       clock.reset()
       while clock.getTime() < baseline:
-        self.win.flip(clearBuffer=True)
         self.fixation.draw()
         self._draw_all_dots()
+        self.win.flip()
 
-      # Cue: zvýraznění bodu odpovídajícího třídy
+      # Cue: zvýrazníme příslušný bod před smyčkou
+      dot = self.dots[trial.label]
+      dot.radius = 0.05
+      dot.fillColor = "yellow"
+
       clock.reset()
       push_marker(self.marker_outlet, str(trial.code))
       while clock.getTime() < cue_dur:
-        self.win.flip(clearBuffer=True)
         self.fixation.draw()
         self._draw_all_dots()
-        # zvýrazníme příslušný bod (větší radius / jiná barva)
-        dot = self.dots[trial.label]
-        dot.radius = 0.05
-        dot.fillColor = "yellow"
         dot.draw()
+        self.win.flip()
 
       # Fáze imaginace – bod vrátíme do standardní velikosti/barvy
       dot.radius = 0.03
       dot.fillColor = "white"
       clock.reset()
       while clock.getTime() < imagery_dur:
-        self.win.flip(clearBuffer=True)
         self.fixation.draw()
         self._draw_all_dots()
+        self.win.flip()
 
       # Inter-trial interval (odpočinek)
       clock.reset()
       while clock.getTime() < iti:
-        self.win.flip(clearBuffer=True)
         self.fixation.draw()
         self._draw_all_dots()
+        self.win.flip()
 
     self.win.close()
