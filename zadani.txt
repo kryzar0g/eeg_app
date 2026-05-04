@@ -1,0 +1,22 @@
+Rozpoznávání motorické imaginace z EEG signálů
+
+Recognition of Motor Imagery from EEG Signals
+
+F7PMIRPJ2 – Ročníkový projekt II.
+ 
+Student
+Bc. Kryštof Záruba
+
+
+
+Vedoucí
+ Ing. Václav Gerla, Ph.D.
+ pracoviště: ČVUT – CIIRC, Kognitivní neurověda
+ e-mailová adresa: vaclav.gerla@cvut.cz
+ telefon: +420 776 597 797
+Zadání
+Cílem projektu je vyvinout softwarové řešení pro rozpoznávání motorické imaginace z EEG signálu (Brain–Computer Interface; BCI). Student vytvoří aplikaci umožňující načítání signálů z EEG zařízení prostřednictvím univerzálního protokolu, např. Lab Streaming Layer (LSL). Aplikace bude obsahovat rozhraní pro práci s vizuálními podněty a umožní záznam EEG signálů včetně ukládání přesných časových značek prezentovaných podnětů. Student dále nad naměřenými daty navrhne a otestuje algoritmy pro segmentaci EEG dat, extrakci vhodných popisných příznaků a vytvoří klasifikační model pro rozpoznávání různých typů motorické imaginace. Součástí řešení bude také vyhodnocení výkonnosti klasifikačního modelu. EEG zařízení pro sběr dat a testování aplikace je k dispozici na CIIRC.
+ 
+Doporučená literatura
+●   	Niedermeyer E., Lopes da Silva F. Electroencephalography: Basic Principles, Clinical Applications and Related Fields. Philadelphia: Lippincott Williams & Wilkins.
+●   	Kothe, C., Shirazi, S. Y., Stenner, T., Medine, D., Boulay, C., Grivich, M. I., Artoni, F., Mullen, T., Delorme, A., & Makeig, S. (2025). The Lab Streaming Layer for Synchronized Multimodal Recording. Imaging Neuroscience, 3, IMAG.a.136. https://doi.org/10.1162/IMAG.a.136
