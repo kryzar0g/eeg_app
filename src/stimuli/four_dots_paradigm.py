@@ -44,7 +44,7 @@ class FourDotsParadigm:
     self.fixation = visual.TextStim(self.win, text="+", color=(1, 1, 1), pos=(0, 0))
 
     # Pozice čtyř bodů v normovaných souřadnicích
-    self.dots: Dict[str, visual.Circle] = {
+    self.dots = {
       "UP": visual.Circle(self.win, radius=0.03, pos=(0, 0.6), fillColor="white"),
       "DOWN": visual.Circle(self.win, radius=0.03, pos=(0, -0.6), fillColor="white"),
       "LEFT": visual.Circle(self.win, radius=0.03, pos=(-0.6, 0), fillColor="white"),
