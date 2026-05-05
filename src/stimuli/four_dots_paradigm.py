@@ -4,7 +4,12 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List
 
-from psychopy import core, event, visual
+try:
+  from psychopy import core, event, visual
+  _PSYCHOPY_IMPORT_ERROR: Exception | None = None
+except ModuleNotFoundError as exc:
+  core = event = visual = None  # type: ignore[assignment]
+  _PSYCHOPY_IMPORT_ERROR = exc
 
 from ..config import AppConfig
 from ..lsl_acquisition import push_marker
@@ -24,10 +29,17 @@ class FourDotsParadigm:
   """
 
   def __init__(self, config: AppConfig, marker_outlet) -> None:
+    if _PSYCHOPY_IMPORT_ERROR is not None:
+      raise RuntimeError(
+        "Režim 'record' vyžaduje balík psychopy. Na tomto Pythonu není dostupný, "
+        "protože PsychoPy není kompatibilní s Pythonem 3.14. Použij kompatibilní "
+        "prostředí (typicky Python 3.10/3.11) a nainstaluj závislosti z requirements.txt."
+      ) from _PSYCHOPY_IMPORT_ERROR
+
     self.config = config
     self.marker_outlet = marker_outlet
 
-    self.win = visual.Window(fullscr=True, color=(0, 0, 0), units="norm")
+    self.win = self._create_window()
 
     self.fixation = visual.TextStim(self.win, text="+", color=(1, 1, 1), pos=(0, 0))
 
@@ -40,6 +52,31 @@ class FourDotsParadigm:
     }
 
     self.trials: List[TrialDefinition] = self._build_trials()
+
+  def _create_window(self):
+    """Create the PsychoPy window with a safer fallback for weak drivers."""
+
+    window_kwargs = dict(
+      color=(0, 0, 0),
+      units="norm",
+      allowGUI=False,
+      checkTiming=False,
+      waitBlanking=False,
+      useFBO=False,
+    )
+
+    try:
+      return visual.Window(fullscr=True, **window_kwargs)
+    except Exception as first_error:
+      try:
+        return visual.Window(fullscr=False, size=(1280, 720), **window_kwargs)
+      except Exception as second_error:
+        raise RuntimeError(
+          "PsychoPy nedokáže vytvořit OpenGL okno. Pravděpodobně jde o problém s "
+          "grafickým ovladačem, vzdálenou plochou nebo omezeným GPU prostředím. "
+          "Zkuste aktualizovat grafický ovladač nebo spustit aplikaci na lokálním "
+          "stroji s plnohodnotnou podporou OpenGL."
+        ) from second_error
 
   def _build_trials(self) -> List[TrialDefinition]:
     mapping = self.config.paradigm.get("classes", {})

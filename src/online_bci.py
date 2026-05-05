@@ -16,6 +16,56 @@ from .preprocessing import bandpass_filter
 _CLASS_NAMES: dict[int, str] = {1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
 
 
+def _get_expected_feature_count(model) -> Optional[int]:
+  """Vrátí počet příznaků, které očekává uložený model."""
+
+  expected = getattr(model, "n_features_in_", None)
+  if expected is not None:
+    return int(expected)
+
+  named_steps = getattr(model, "named_steps", None)
+  if isinstance(named_steps, dict):
+    scaler = named_steps.get("scaler")
+    expected = getattr(scaler, "n_features_in_", None)
+    if expected is not None:
+      return int(expected)
+
+  return None
+
+
+def _validate_feature_matrix(model, X: np.ndarray, bands: list[list[float] | tuple[float, float]]) -> None:
+  """Přeruší běh s čitelnou chybou, pokud feature matrix nesedí s modelem."""
+
+  expected_features = _get_expected_feature_count(model)
+  actual_features = int(X.shape[1])
+
+  if expected_features is None or actual_features == expected_features:
+    return
+
+  n_bands = len(bands)
+  expected_channels = None
+  actual_channels = None
+
+  if n_bands > 0:
+    if expected_features % n_bands == 0:
+      expected_channels = expected_features // n_bands
+    if actual_features % n_bands == 0:
+      actual_channels = actual_features // n_bands
+
+  raise RuntimeError(
+      "Model and online input do not have the same number of features. "
+      f"The model expects {expected_features} features, but the current online computation provides {actual_features}. "
+    + (
+        f"With {n_bands} bands this corresponds to about {actual_channels} EEG channels online versus "
+        f"{expected_channels} channels in the trained model. "
+      if expected_channels is not None and actual_channels is not None
+      else ""
+    )
+      + "You are probably using a model trained on a different EEG channel set or band configuration. "
+      "Use the same LSL stream / EEG setup as during training, or train a new model."
+  )
+
+
 def _build_info(n_channels: int, sfreq: float) -> mne.Info:
   """Vytvoří MNE Info objekt pro zadaný počet kanálů a vzorkovací frekvenci."""
 
@@ -99,6 +149,8 @@ def run_online_bci(config: Optional[AppConfig] = None) -> None:
       bandpass_filter(epochs, l_freq, h_freq)
 
       X, _, _ = compute_bandpower_features(epochs, bands)
+
+      _validate_feature_matrix(model, X, bands)
 
       pred = int(model.predict(X)[0])
       label = _CLASS_NAMES.get(pred, str(pred))

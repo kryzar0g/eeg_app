@@ -38,3 +38,29 @@ Layer (LSL).
 2. Spusťte zaznamenání trénovacího sezení (MI paradigma se 4 směry).
 3. Proveďte offline analýzu a natrénujte klasifikátor.
 4. Spusťte online BCI režim s natrénovaným modelem.
+
+## Doporučené spuštění na Windows (Python 3.10)
+
+`record` režim používá PsychoPy, které je stabilně podporováno na Pythonu 3.10/3.11.
+Na tomto projektu je ověřený postup přes Conda a Python 3.10:
+
+```powershell
+conda create -n eeg_py310 python=3.10 -y
+conda run -n eeg_py310 python -m pip install -r requirements.txt
+conda run -n eeg_py310 python run_app.py
+```
+
+Pokud `conda` v aktuálním PowerShellu není v PATH, použijte přímo plnou cestu:
+
+```powershell
+& 'C:/Users/kryst/miniconda3/condabin/conda.bat' run -n eeg_py310 python run_app.py
+```
+
+Pokud je aktivní `.venv`, nejdřív ji ukončete příkazem `deactivate`.
+
+Alternativně můžete prostředí aktivovat a spouštět aplikaci klasicky:
+
+```powershell
+conda activate eeg_py310
+python run_app.py
+```
