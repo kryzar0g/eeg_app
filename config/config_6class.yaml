@@ -1,0 +1,45 @@
+experiment:
+  subject_id: "S003_6class"
+  session_id: "session_6class"
+  trials_per_class: 20
+  baseline_duration: 2.0
+  cue_duration: 1.0
+  imagery_duration: 4.0
+  iti_duration: 2.0
+
+lsl:
+  eeg_stream_name: "EEG"
+  eeg_stream_type: "EEG"
+  marker_stream_name: "Markers"
+
+paradigm:
+  classes:
+    HAND_LEFT: 1
+    HAND_RIGHT: 2
+    FOOT_LEFT: 3
+    FOOT_RIGHT: 4
+    TONGUE: 5
+    REST: 6
+
+preprocessing:
+  sfreq: 250.0
+  l_freq: 8.0
+  h_freq: 30.0
+  notch_freq: 50.0
+
+features:
+  bands:
+    - [8.0, 12.0]
+    - [12.0, 30.0]
+
+classifier:
+  algorithm: "lda"
+  test_size: 0.2
+
+events:
+  mode: "csv"
+  stim_channel: "STI 014"
+  tmin: 0.0
+  tmax: 4.0
+  timestamp_csv_path: "data/timestamps.csv"
+  epoch_length: 4.0

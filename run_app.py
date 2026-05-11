@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Spouštěcí skript pro EEG BCI aplikaci.
+"""EEG BCI Application launcher.
 
-Lze spustit přímo::
-
+Run directly:
     python run_app.py
 
-nebo poklikáním na soubor v průzkumníku souborů (pokud je Python
-nastaven jako výchozí interpret pro soubory *.py).
+Or double-click if Python is set as default handler for .py files.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# Ujistíme se, že kořen projektu je na sys.path, aby fungovaly importy balíčku src.*
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
-  sys.path.insert(0, str(_ROOT))
+    sys.path.insert(0, str(_ROOT))
 
-from src.main import run_gui_mode  # noqa: E402
+from src.logging_config import setup_logging
+from src.main import run_gui_mode
 
 if __name__ == "__main__":
-  run_gui_mode()
+    setup_logging(log_dir=_ROOT / "logs", level="INFO")
+    run_gui_mode()

@@ -239,6 +239,7 @@ class EegAppGui:
     self._root.after(100, self._poll_log)
 
     def task() -> None:
+      import traceback
       old_stdout = sys.stdout
       old_stderr = sys.stderr
       writer = _QueueWriter(self._log_queue)
@@ -246,9 +247,12 @@ class EegAppGui:
       sys.stderr = writer  # type: ignore[assignment]
       try:
         _run_selection(selection)
-        self._log_queue.put("\n--- Hotovo ✓ ---\n")
+        self._log_queue.put("\n--- Completed ✓ ---\n")
+      except KeyboardInterrupt:
+        self._log_queue.put("\n--- Interrupted by user ---\n")
       except Exception as exc:
-        self._log_queue.put(f"\n[CHYBA] {exc}\n")
+        self._log_queue.put(f"\n[ERROR] {type(exc).__name__}: {exc}\n")
+        self._log_queue.put(traceback.format_exc())
       finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
@@ -273,13 +277,13 @@ def _run_selection(selection: GuiSelection) -> None:
 
   if selection.mode == "record":
     from .lsl_acquisition import create_streams
-    from .stimuli.four_dots_paradigm import FourDotsParadigm
+    from .stimuli.paradigm_base import MotorImageryParadigm
 
     from .config import load_config
 
     config = load_config()
     streams = create_streams(config)
-    paradigm = FourDotsParadigm(config, streams.marker_outlet)
+    paradigm = MotorImageryParadigm(config, streams.marker_outlet)
     paradigm.run()
 
   elif selection.mode == "offline":
@@ -297,9 +301,6 @@ def _run_selection(selection: GuiSelection) -> None:
 
     config = load_config()
     run_online_bci(config)
-
-  else:
-    raise NotImplementedError(f"Neznámý režim: {selection.mode}")
 
 
 # ── Veřejné API ───────────────────────────────────────────────────────────────

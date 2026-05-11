@@ -1,0 +1,43 @@
+experiment:
+  subject_id: "S004_8ch"
+  session_id: "session_8ch"
+  trials_per_class: 25
+  baseline_duration: 2.0
+  cue_duration: 1.0
+  imagery_duration: 4.0
+  iti_duration: 2.0
+
+lsl:
+  eeg_stream_name: "EEG"
+  eeg_stream_type: "EEG"
+  marker_stream_name: "Markers"
+
+paradigm:
+  classes:
+    UP: 1
+    DOWN: 2
+    LEFT: 3
+    RIGHT: 4
+
+preprocessing:
+  sfreq: 250.0
+  l_freq: 8.0
+  h_freq: 30.0
+  notch_freq: 50.0
+
+features:
+  bands:
+    - [8.0, 12.0]
+    - [12.0, 30.0]
+
+classifier:
+  algorithm: "lda"
+  test_size: 0.2
+
+events:
+  mode: "csv"
+  stim_channel: "STI 014"
+  tmin: 0.0
+  tmax: 4.0
+  timestamp_csv_path: "data/timestamps.csv"
+  epoch_length: 4.0

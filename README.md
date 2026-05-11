@@ -1,66 +1,171 @@
 # eeg_app
 
-BCI aplikace založená na motorické imaginaci (MI) pro 4 směry
-(bod nahoře, dole, vlevo, vpravo) s využitím EEG a Lab Streaming
-Layer (LSL).
+**Universální BCI aplikace s motorickou imaginací (MI)** - pracuje s libovolným počtem elektrod (8, 64, 128+) a libovolným počtem tříd (2, 4, 6, N).
 
-## Cíle
+Aplikace komunikuje s EEG zařízením přes **Lab Streaming Layer (LSL)** v reálném čase.
 
-- Připojení k EEG zařízení přes LSL v reálném čase.
-- Zobrazování jednoduchých 2D vizuálních podnětů se 4 směry a
-	přesně časovanými událostmi (markery).
-- Segmentace dat a extrakce příznaků vhodných pro MI BCI.
-- Trénink a vyhodnocení klasifikátoru (např. LDA/SVM) a následné
-	online rozpoznávání.
+## 🚀 Rychlý start (1 minuta)
 
-## Struktura projektu
-
-- `src/` – zdrojový kód aplikace
-	- `main.py` – vstupní bod aplikace (CLI / režimy)
-	- `config.py` – načítání konfigurace
-	- `lsl_acquisition.py` – připojení k EEG přes LSL
-	- `preprocessing.py` – předzpracování a epochování
-	- `features.py` – extrakce příznaků
-	- `classifier.py` – trénink a uložení modelu
-	- `offline_analysis.py` – offline pipeline pro trénink a evaluaci
-	- `online_bci.py` – online BCI smyčka
-	- `stimuli/four_dots_paradigm.py` – vizuální MI paradigma se 4 body
-- `config/config.yaml` – parametry experimentu a zpracování
-- `data/raw/` – syrová naměřená data
-- `data/processed/` – epoched/feature data
-- `models/` – uložené klasifikátory
-- `reports/` – výsledky vyhodnocení
-- `logs/` – logy běhu aplikace
-
-## Základní workflow
-
-1. Nainstalujte závislosti: `pip install -r requirements.txt`.
-2. Spusťte zaznamenání trénovacího sezení (MI paradigma se 4 směry).
-3. Proveďte offline analýzu a natrénujte klasifikátor.
-4. Spusťte online BCI režim s natrénovaným modelem.
-
-## Doporučené spuštění na Windows (Python 3.10)
-
-`record` režim používá PsychoPy, které je stabilně podporováno na Pythonu 3.10/3.11.
-Na tomto projektu je ověřený postup přes Conda a Python 3.10:
-
+### Instalace (první spuštění)
 ```powershell
-conda create -n eeg_py310 python=3.10 -y
-conda run -n eeg_py310 python -m pip install -r requirements.txt
-conda run -n eeg_py310 python run_app.py
-```
+# 1. Otevřete PowerShell v adresáři projektu
+cd C:\Users\kryst\OneDrive\Documents\skola\eeg_app
 
-Pokud `conda` v aktuálním PowerShellu není v PATH, použijte přímo plnou cestu:
-
-```powershell
-& 'C:/Users/kryst/miniconda3/condabin/conda.bat' run -n eeg_py310 python run_app.py
-```
-
-Pokud je aktivní `.venv`, nejdřív ji ukončete příkazem `deactivate`.
-
-Alternativně můžete prostředí aktivovat a spouštět aplikaci klasicky:
-
-```powershell
+# 2. Aktivujte Conda prostředí
 conda activate eeg_py310
+
+# 3. Spusťte aplikaci
 python run_app.py
 ```
+
+**Poznámka:** Pokud Conda nenajde prostředí `eeg_py310`, vytvořte ho:
+```powershell
+conda create -n eeg_py310 python=3.10 -y
+conda activate eeg_py310
+pip install -r requirements.txt
+python run_app.py
+```
+
+### Co se stane po spuštění
+1. Otevře se **grafické menu** (GUI)
+2. V levém panelu vidíte 4 možnosti:
+   - **Overview** - zobrazení aktuální konfigurace
+   - **Record** - spuštění experimentu (vyžaduje EEG zařízení)
+   - **Train Model** - trénování klasifikátoru (vybere EEG soubor)
+   - **Online BCI** - realtime klasifikace (vyžaduje LSL stream)
+
+---
+
+## Cíle aplikace
+
+- ✅ Připojení k EEG zařízení přes LSL v reálném čase
+- ✅ Zobrazování vizuálních podnětů (dynamicky pozicované pro N tříd)
+- ✅ Segmentace dat a extrakce příznaků
+- ✅ Trénink klasifikátoru (LDA/SVM) a online rozpoznávání
+- ✅ Podpora libovolného počtu elektrod a experimentálních tříd
+
+## Pracovní postup
+
+### Normální workflow (doporučeno)
+```
+1. Record      → Spusťte motorickou imaginaci (generuje markery)
+                 Záznam: LabRecorder zachytí EEG + markery
+   
+2. Train Model → Vyberte nahraný EEG soubor (.edf/.bdf)
+                 Systém: extrahuje příznaky → trénuje LDA/SVM
+                 Výstup: model → models/model_latest.joblib
+   
+3. Online BCI  → Připojte živý EEG stream (LSL)
+                 Systém: načte model → realtime klasifikace
+                 Výstup: logy v logs/eeg_app.log
+```
+
+### Příklady konfigurací
+
+Aplikace obsahuje šablony pro různé nastavení:
+
+| Soubor | Popis | Třídy | Kanály |
+|--------|-------|-------|--------|
+| `config.yaml` | Výchozí 4-třídní | UP, DOWN, LEFT, RIGHT | Auto |
+| `config_2class.yaml` | 2-třídní jednoduché | LEFT, RIGHT | Auto |
+| `config_6class.yaml` | 6-třídní pokročilé | 6 končetin | Auto |
+| `config_8ch.yaml` | Přenosné zařízení | 4 třídy | 8 elektrod |
+| `config_64ch.yaml` | Laboratorní system | 4 třídy | 64 elektrod |
+
+**Jak používat jinou konfiguraci:**
+```powershell
+# Nastavte proměnnou prostředí před spuštěním
+$env:EEG_CONFIG_PATH = "config/config_2class.yaml"
+python run_app.py
+```
+
+## Struktura adresářů
+
+```
+eeg_app/
+├── run_app.py              ← Spusťte tímto
+├── requirements.txt        ← Závislosti
+│
+├── config/
+│   ├── config.yaml         ← Hlavní konfigurace
+│   ├── config_2class.yaml  ← Šablona: 2 třídy
+│   ├── config_6class.yaml  ← Šablona: 6 tříd
+│   ├── config_8ch.yaml     ← Šablona: 8 kanálů
+│   └── config_64ch.yaml    ← Šablona: 64 kanálů
+│
+├── src/                    ← Zdrojový kód
+│   ├── main.py            ← Vstupní bod
+│   ├── config.py          ← Validace konfigurace
+│   ├── gui_app_v2.py      ← Nový GUI s navigací
+│   ├── offline_analysis.py ← Trénování
+│   ├── online_bci.py      ← Realtime klasifikace
+│   ├── lsl_acquisition.py ← Připojení k EEG
+│   ├── preprocessing.py   ← Filtrování
+│   ├── features.py        ← Extrakce příznaků
+│   ├── classifier.py      ← LDA/SVM modely
+│   ├── logging_config.py  ← Logování
+│   └── stimuli/
+│       └── paradigm_base.py ← N-třídní MI paradigma
+│
+├── models/
+│   └── model_latest.joblib ← Natrénovaný model
+│
+├── logs/
+│   └── eeg_app.log        ← Záznamy běhu
+│
+├── README.md              ← Tento soubor
+├── README_ENHANCED.md     ← Rozšíření: příklady, troubleshooting
+├── CONFIG_GUIDE.md        ← Detailní konfigurace
+└── ARCHITECTURE.md        ← Technická architektura
+```
+
+## Instalace prostředí (pokud neexistuje)
+
+Pokud jste nikdy nespuštěli aplikaci:
+
+```powershell
+# Ověřte že máte Conda
+conda --version
+
+# Vytvořte Python 3.10 prostředí
+conda create -n eeg_py310 python=3.10 -y
+
+# Aktivujte prostředí
+conda activate eeg_py310
+
+# Nainstalujte závislosti
+pip install -r requirements.txt
+
+# Spusťte aplikaci
+python run_app.py
+```
+
+## Řešení problémů
+
+### Nelze najít modul 'src'
+- Ujistěte se že jste v adresáři `eeg_app`
+- Spusťte: `cd C:\Users\kryst\OneDrive\Documents\skola\eeg_app`
+
+### Chyba: No module named 'psychopy'
+- Aktualizujte prostředí: `pip install -r requirements.txt`
+- Nebo reinstalujte: `pip install psychopy`
+
+### Nelze připojit k EEG zařízení (Online BCI)
+- Spusťte LabRecorder nebo jiný LSL zdroj
+- Ověřte název streamu v `config.yaml` (výchozí: "EEG")
+- Počkejte 10 sekund na timeout
+
+### GUI se neotevře
+- Zkontrolujte že máte Python 3.10+ aktivní
+- Zkuste spustit s debug logem: `python run_app.py -l DEBUG`
+- Podívejte se do `logs/eeg_app.log`
+
+## Další dokumentace
+
+- 📖 **README_ENHANCED.md** - Úplný uživatelský průvodce
+- ⚙️ **CONFIG_GUIDE.md** - Detailní konfigurace
+- 🏗️ **ARCHITECTURE.md** - Technický design a API
+
+---
+
+**Potřebujete nápovědu?** Podívejte se do `logs/eeg_app.log` pro detaily jakéhokoli chybu.
