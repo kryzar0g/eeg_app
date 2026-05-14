@@ -13,6 +13,7 @@ from typing import Optional
 
 from .config import load_config
 from .patient_profiles import PatientProfile, create_profile, list_profiles
+from multiprocessing import Process
 
 logger = logging.getLogger(__name__)
 
@@ -758,16 +759,23 @@ Paradigm:
 def _run_selection(selection: GuiSelection) -> None:
     """Execute the selected mode (runs in background thread)."""
     if selection.mode == "record":
-        from .lsl_acquisition import create_streams
-        from .stimuli.paradigm_base import MotorImageryParadigm
-        from .config import load_config
-        
-        config = load_config()
-        if selection.patient_profile_name:
-            print(f"Patient: {selection.patient_profile_name} (id={selection.patient_profile_id})")
-        streams = create_streams(config)
-        paradigm = MotorImageryParadigm(config, streams.marker_outlet)
-        paradigm.run()
+        # PsychoPy/pyglet must run in the main thread of a process. Spawn a separate
+        # process for the paradigm so its event loop runs in that process's main thread.
+        def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
+            from .lsl_acquisition import create_streams
+            from .stimuli.paradigm_base import MotorImageryParadigm
+            from .config import load_config
+
+            cfg = load_config()
+            if pname:
+                print(f"Patient: {pname} (id={pid})")
+            streams = create_streams(cfg)
+            paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
+            paradigm.run()
+
+        proc = Process(target=_start_paradigm_proc, args=(selection.patient_profile_id, selection.patient_profile_name))
+        proc.start()
+        proc.join()
     
     elif selection.mode == "offline":
         from .offline_analysis import run_offline_from_file
