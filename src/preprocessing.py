@@ -52,13 +52,39 @@ def apply_bandpass_filter(data: np.ndarray, sfreq: float, l_freq: float, h_freq:
 
     try:
         filtered = signal.sosfiltfilt(sos, flat, axis=-1)
-    except ValueError:
-        # Fallback for very short signals where filtfilt padlen > signal length.
-        # Use forward then reverse sosfilt to approximate filtfilt without padding.
-        filtered = signal.sosfilt(sos, flat, axis=-1)
-        filtered = np.flip(filtered, axis=-1)
-        filtered = signal.sosfilt(sos, filtered, axis=-1)
-        filtered = np.flip(filtered, axis=-1)
+    except ValueError as exc:
+        # Try to parse padlen from error message and pad reflectively to satisfy filtfilt
+        msg = str(exc)
+        import re
+
+        m = re.search(r"padlen, which is (\d+)", msg)
+        if m:
+            padlen = int(m.group(1))
+            n_signals, n_samples = flat.shape
+            if n_samples <= padlen:
+                need = padlen + 1 - n_samples
+                left = need // 2 + (need % 2)
+                right = need // 2
+                padded = np.pad(flat, ((0, 0), (left, right)), mode="reflect")
+                try:
+                    filt_padded = signal.sosfiltfilt(sos, padded, axis=-1)
+                    # remove padding
+                    filtered = filt_padded[:, left : left + n_samples]
+                except Exception:
+                    # final fallback to forward/backward sosfilt (no padding)
+                    filtered = signal.sosfilt(sos, flat, axis=-1)
+                    filtered = np.flip(filtered, axis=-1)
+                    filtered = signal.sosfilt(sos, filtered, axis=-1)
+                    filtered = np.flip(filtered, axis=-1)
+            else:
+                # Unexpected: re-raise to be handled by outer code
+                raise
+        else:
+            # Unknown ValueError message — fallback to non-pad filtfilt approx
+            filtered = signal.sosfilt(sos, flat, axis=-1)
+            filtered = np.flip(filtered, axis=-1)
+            filtered = signal.sosfilt(sos, filtered, axis=-1)
+            filtered = np.flip(filtered, axis=-1)
 
     return filtered.reshape(array.shape)
 

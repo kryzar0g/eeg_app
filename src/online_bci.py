@@ -46,10 +46,10 @@ def _predict_with_legacy_model(model: object, epoch_arr: np.ndarray, config: App
         use_car=bool(getattr(config.preprocessing, "car", False)),
     )
 
+    # Do not enforce expected_n_times here — accept whatever epoch length is available online
     extractor = BandpowerFeatureExtractor(
         sfreq=float(config.preprocessing.sfreq),
         bands=config.features.bands,
-        expected_n_times=int(round(float(config.training.window_length_sec) * float(config.preprocessing.sfreq))),
     )
     extractor.fit(processed)
     features = extractor.transform(processed)

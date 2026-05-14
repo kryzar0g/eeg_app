@@ -271,6 +271,7 @@ class EegAppGui:
         self._log_queue: queue.Queue[str] = queue.Queue()
         self._task_thread: Optional[threading.Thread] = None
         self._running = False
+        self._last_selection: Optional[GuiSelection] = None
         self._patient_profile: Optional[PatientProfile] = None
         
         # Load config for info display
@@ -657,6 +658,7 @@ Paradigm:
     def _start_task(self, selection: GuiSelection) -> None:
         """Start background task."""
         self._running = True
+        self._last_selection = selection
         
         # Disable nav buttons
         for btn in self._nav_buttons.values():
@@ -732,6 +734,25 @@ Paradigm:
         # Re-enable nav buttons
         for btn in self._nav_buttons.values():
             btn.configure(state="normal")
+
+        # If the finished task was a recording, offer to run offline training
+        try:
+            if self._last_selection and self._last_selection.mode == "record":
+                do_train = messagebox.askyesno(
+                    "Train model?",
+                    "Recording finished. Do you want to train a model now using a saved EDF/BDF file?",
+                    parent=self._root,
+                )
+                if do_train:
+                    path = filedialog.askopenfilename(
+                        title="Select EEG file for training",
+                        filetypes=[("EEG files", "*.edf *.bdf"), ("All files", "*.*")],
+                    )
+                    if path:
+                        selection = GuiSelection(mode="offline", offline_file=path)
+                        self._start_task(selection)
+        except Exception:
+            logger.exception("Error offering train-after-record flow")
 
 
 def _run_selection(selection: GuiSelection) -> None:
