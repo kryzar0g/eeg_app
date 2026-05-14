@@ -20,9 +20,19 @@ preprocessing:
   notch_freq: 50.0  # Or 60 Hz in US
 
 features:
+  method: "fbcsp"  # "csp", "fbcsp" or "psd"
   bands:
+    - [4.0, 8.0]    # Optional lower band for FBCSP
     - [8.0, 12.0]   # Alpha
     - [12.0, 30.0]  # Beta
+    - [30.0, 40.0]  # Optional higher band for FBCSP
+  csp_components: 2  # Number of CSP components per band
+  fbcsp_top_k: 8     # Keep only the best FBCSP features after MI ranking
+
+training:
+  window_length_sec: 2.0  # Model input window length
+  crop_enabled: true      # Enable sliding-window augmentation in offline training
+  crop_step_sec: 0.5      # Overlap stride for crop augmentation
 
 classifier:
   algorithm: "lda"
@@ -83,13 +93,22 @@ paradigm:
 ### experiment
 Defines trial timings and repetitions.
 
-- `trials_per_class`: Number of trials per class (default: 40)
+- `trials_per_class`: Number of trials per class (default: 36 in the short preset)
 - `baseline_duration`: Baseline period before cue (seconds)
 - `cue_duration`: Visual cue presentation (seconds)
 - `imagery_duration`: Motor imagery period (seconds)
 - `iti_duration`: Inter-trial interval (seconds)
 
 Total trial duration = baseline + cue + imagery + iti
+
+Recommended short-but-reliable preset:
+- `baseline_duration: 1.5`
+- `cue_duration: 0.8`
+- `imagery_duration: 3.0`
+- `iti_duration: 1.5`
+- `trials_per_class: 36`
+
+With 4 classes, this reduces session time from about 24 minutes to about 16 minutes, while still leaving enough imagery time for a 2 s model window and crop augmentation.
 
 ### lsl
 LSL stream parameters (rarely need change).
@@ -124,6 +143,7 @@ EEG signal preprocessing parameters.
 - `l_freq`: Lower frequency for band-pass filter (Hz)
 - `h_freq`: Upper frequency for band-pass filter (Hz)
 - `notch_freq`: Frequency for notch filter, typically 50Hz (Europe) or 60Hz (US)
+- `car`: Apply common average reference after filtering (`true`/`false`)
 
 Constraints:
 - 0 ≤ l_freq < h_freq
@@ -133,6 +153,10 @@ Constraints:
 ### features
 Feature extraction parameters.
 
+- `method`: Feature method used in the saved model pipeline
+  * `csp`: Common Spatial Pattern on a single band
+  * `fbcsp`: Filter Bank CSP across multiple bands, with optional mutual-information selection
+  * `psd`: Legacy Welch/log-bandpower fallback
 - `bands`: List of frequency bands for feature extraction
   * Each band: [fmin, fmax]
   * Common bands:
@@ -140,6 +164,19 @@ Feature extraction parameters.
     - [12, 30]: Beta
     - [30, 40]: Gamma
   * You can add as many bands as needed
+- `csp_components`: Number of CSP components to keep per band
+  * Recommended start: 2
+  * Higher values increase feature count and runtime slightly
+- `fbcsp_top_k`: Number of best FBCSP features to keep after mutual information ranking
+  * Set to `0` to keep all features
+  * A good start is 8 to 12
+
+### training
+Offline training and online model-window settings.
+
+- `window_length_sec`: Input window length used by the model and online inference
+- `crop_enabled`: If `true`, the offline trainer generates overlapping crop windows from each epoch
+- `crop_step_sec`: Step between crop windows in seconds
 
 Example:
 ```yaml
@@ -181,6 +218,11 @@ Event detection for offline analysis.
 - Use fewer frequency bands
 - Consider shorter timings (baseline: 1.0-1.5s, imagery: 2.5-3.5s)
 
+### Faster calibration without losing much robustness
+- Keep `imagery_duration` at least 3.0 s if you use a 2.0 s model window
+- Prefer lowering `trials_per_class` only after you have enough data for stable validation
+- Use crop augmentation so the model sees more training windows from the same recording
+
 ### Lab Setup (32+ channels)
 - Standard `trials_per_class` (35-50)
 - Can use more frequency bands
@@ -201,6 +243,42 @@ The system automatically detects the number of EEG channels from:
 2. **Offline mode**: EDF/BDF file channel count
 
 No manual configuration needed! The paradigm and classification work with any number of channels.
+
+## Patient Profiles
+
+When the GUI starts, it asks you to either select an existing patient profile or create a new one.
+
+- Profiles are stored as JSON files in `data/patients/`
+- Required fields: first name, last name, date of birth, sex
+- Optional fields: notes
+- The selected profile is shown in the GUI sidebar and logged when recording starts
+
+## Recording Instructions
+
+Before the first trial of record mode, the app shows a short instruction screen:
+
+- Sit still and look at the screen
+- Follow the highlighted cue
+- In the imagery phase, only imagine the indicated movement
+- Use `ESC` to stop the recording at any time
+
+## CSP Notes
+
+The current fast pipeline uses FBCSP as the default feature method.
+
+- CSP/FBCSP is learned during offline training and saved inside the `joblib` pipeline.
+- Online mode loads the same pipeline, so feature extraction stays identical.
+- The implementation uses a per-band, one-vs-rest strategy to support the current multi-class setup.
+- `training.window_length_sec` can be shorter than `experiment.imagery_duration`; cropping reuses the longer recording for more samples.
+- If you switch to `features.method: psd`, the application falls back to the older Welch/log-bandpower path.
+- Keep `training.window_length_sec`, `preprocessing.sfreq`, and `features.method` aligned between training and online use.
+
+### Session duration estimate
+
+For the default short preset:
+- One trial lasts about 6.8 s
+- 36 trials per class × 4 classes = 144 trials total
+- Total session time is about 16.3 minutes, excluding small pauses between blocks
 
 ## Environment Variables
 

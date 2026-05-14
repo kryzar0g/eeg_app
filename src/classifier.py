@@ -14,13 +14,24 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from .config import AppConfig, PROJECT_ROOT
+from .features import BandpowerFeatureExtractor, EpochSignalPreprocessor, FilterBankCSP
 
 logger = logging.getLogger(__name__)
 
 
 def _build_model(config: AppConfig) -> Pipeline:
-    """Build classifier pipeline with scaler + LDA or SVM."""
+    """Build a raw-epoch pipeline with preprocessing, feature extraction and classifier."""
     clf_algorithm = config.classifier.algorithm.lower()
+    feature_method = config.features.method.lower()
+
+    sfreq = float(config.preprocessing.sfreq)
+    l_freq = float(config.preprocessing.l_freq)
+    h_freq = float(config.preprocessing.h_freq)
+    notch_freq = float(config.preprocessing.notch_freq)
+    use_car = bool(getattr(config.preprocessing, "car", False))
+    window_length_sec = float(config.training.window_length_sec)
+    expected_n_times = int(round(window_length_sec * sfreq))
+    bands = [tuple(map(float, band)) for band in config.features.bands]
     
     if clf_algorithm == "lda":
         clf = LinearDiscriminantAnalysis()
@@ -28,8 +39,42 @@ def _build_model(config: AppConfig) -> Pipeline:
         clf = SVC(kernel="linear")
     else:
         raise ValueError(f"Unknown classifier: {clf_algorithm}")
-    
-    return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+
+    preprocess = EpochSignalPreprocessor(
+        sfreq=sfreq,
+        l_freq=l_freq,
+        h_freq=h_freq,
+        notch_freq=notch_freq,
+        use_car=use_car,
+        expected_n_times=expected_n_times,
+    )
+
+    if feature_method in {"csp", "fbcsp"}:
+        fbands = bands[:1] if feature_method == "csp" else bands
+        feature_step = FilterBankCSP(
+            sfreq=sfreq,
+            bands=fbands,
+            n_components=int(config.features.csp_components),
+            top_k_features=int(config.features.fbcsp_top_k) if feature_method == "fbcsp" else 0,
+            expected_n_times=expected_n_times,
+        )
+    elif feature_method == "psd":
+        feature_step = BandpowerFeatureExtractor(
+            sfreq=sfreq,
+            bands=bands,
+            expected_n_times=expected_n_times,
+        )
+    else:
+        raise ValueError(f"Unknown feature method: {feature_method}")
+
+    return Pipeline(
+        [
+            ("preprocess", preprocess),
+            ("features", feature_step),
+            ("scaler", StandardScaler()),
+            ("clf", clf),
+        ]
+    )
 
 
 def train_and_evaluate(
@@ -41,7 +86,7 @@ def train_and_evaluate(
     """Train classifier and evaluate on test set.
     
     Args:
-        X: Feature matrix (n_samples, n_features)
+        X: Epoch array (n_epochs, n_channels, n_times)
         y: Labels (n_samples,)
         config: Application configuration
         save_model: Whether to save trained model to disk
@@ -57,14 +102,22 @@ def train_and_evaluate(
     )
     
     logger.info(f"Training on {len(X_train)} samples, testing on {len(X_test)}")
+    logger.info(
+        f"Feature method={config.features.method.lower()}, classifier={config.classifier.algorithm.lower()}"
+    )
+    logger.info(f"Model window length: {config.training.window_length_sec}s")
     
     model = _build_model(config)
     model.fit(X_train, y_train)
     
     y_pred = model.predict(X_test)
     acc = float(accuracy_score(y_test, y_pred))
+
+    preprocessed_sample = model.named_steps["preprocess"].transform(X_test[:1])
+    features_shape = model.named_steps["features"].transform(preprocessed_sample).shape
     
     logger.info(f"Test accuracy: {acc:.4f}")
+    logger.info(f"Transformed feature shape: {features_shape}")
     logger.debug(f"Confusion matrix:\n{confusion_matrix(y_test, y_pred)}")
     logger.debug(f"Classification report:\n{classification_report(y_test, y_pred)}")
     

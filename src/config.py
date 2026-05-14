@@ -33,6 +33,7 @@ class PreprocessingConfig(BaseModel):
     l_freq: float = Field(8.0, ge=0)
     h_freq: float = Field(30.0, ge=0)
     notch_freq: float = Field(50.0, gt=0)
+    car: bool = Field(False, description="Apply common average reference after filtering")
     
     @validator("h_freq")
     def h_freq_greater_than_l_freq(cls, v, values):
@@ -42,10 +43,19 @@ class PreprocessingConfig(BaseModel):
 
 
 class FeaturesConfig(BaseModel):
+    method: str = Field("fbcsp", pattern="^(csp|fbcsp|psd)$")
     bands: list[tuple[float, float]] = Field(
         [(8, 12), (12, 30)],
         description="Frequency bands for feature extraction"
     )
+    csp_components: int = Field(2, gt=0, le=8)
+    fbcsp_top_k: int = Field(12, ge=0)
+
+
+class TrainingConfig(BaseModel):
+    window_length_sec: float = Field(2.0, gt=0, description="Model input window length in seconds")
+    crop_enabled: bool = Field(True, description="Enable sliding-window cropping for offline training")
+    crop_step_sec: float = Field(0.5, gt=0, description="Stride for offline crop augmentation in seconds")
 
 
 class ClassifierConfig(BaseModel):
@@ -58,6 +68,7 @@ class AppConfig(BaseModel):
     lsl: LSLConfig = Field(default_factory=LSLConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
     classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
     
     # Additional optional sections from YAML
@@ -97,6 +108,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     
     with path.open("r", encoding="utf-8") as f:
         raw_data = yaml.safe_load(f) or {}
+
+    classifier_data = raw_data.get("classifier")
+    if isinstance(classifier_data, dict) and "algorithm" not in classifier_data and "type" in classifier_data:
+        classifier_data["algorithm"] = classifier_data["type"]
     
     try:
         config = AppConfig(**raw_data)

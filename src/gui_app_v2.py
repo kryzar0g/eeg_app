@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Optional
 
 from .config import load_config
+from .patient_profiles import PatientProfile, create_profile, list_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ class GuiSelection:
     """User's mode and configuration selection."""
     mode: str
     offline_file: Optional[str] = None
+    patient_profile_id: Optional[str] = None
+    patient_profile_name: Optional[str] = None
 
 
 class _QueueWriter:
@@ -36,6 +39,222 @@ class _QueueWriter:
         pass
 
 
+class PatientProfileDialog:
+    """Modal dialog for selecting an existing patient or creating a new one."""
+
+    def __init__(self, root: tk.Tk) -> None:
+        self._root = root
+        self._dialog = tk.Toplevel(root)
+        self._dialog.title("Patient Profile")
+        self._dialog.resizable(False, False)
+        self._dialog.transient(root)
+        self._dialog.grab_set()
+
+        self.result: Optional[PatientProfile] = None
+        self._profiles = list_profiles()
+
+        container = ttk.Frame(self._dialog, padding=15)
+        container.grid(row=0, column=0, sticky="nsew")
+        self._dialog.columnconfigure(0, weight=1)
+        self._dialog.rowconfigure(0, weight=1)
+
+        ttk.Label(container, text="Patient profile", style="Title.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+        ttk.Label(
+            container,
+            text="Choose an existing patient profile or create a new one before recording.",
+            style="Sub.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+
+        ttk.Label(container, text="Existing profiles", style="Section.TLabel").grid(
+            row=2, column=0, sticky="w"
+        )
+        self._existing_var = tk.StringVar()
+        self._existing_combo = ttk.Combobox(
+            container,
+            textvariable=self._existing_var,
+            state="readonly",
+            values=[profile.display_name for profile in self._profiles],
+            width=42,
+        )
+        self._existing_combo.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        if self._profiles:
+            self._existing_combo.current(0)
+
+        ttk.Separator(container, orient="horizontal").grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=10
+        )
+
+        ttk.Label(container, text="Create new profile", style="Section.TLabel").grid(
+            row=5, column=0, columnspan=2, sticky="w"
+        )
+
+        self._first_name_var = tk.StringVar()
+        self._last_name_var = tk.StringVar()
+        self._dob_var = tk.StringVar()
+        self._sex_var = tk.StringVar()
+        self._notes_var = tk.StringVar()
+
+        form = ttk.Frame(container)
+        form.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        form.columnconfigure(1, weight=1)
+
+        fields = [
+            ("First name", self._first_name_var),
+            ("Last name", self._last_name_var),
+            ("Date of birth (DD.MM.YYYY)", self._dob_var),
+            ("Sex", self._sex_var),
+            ("Notes", self._notes_var),
+        ]
+        for row, (label, var) in enumerate(fields):
+            ttk.Label(form, text=label + ":").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=2)
+            ttk.Entry(form, textvariable=var, width=40).grid(row=row, column=1, sticky="ew", pady=2)
+
+        button_row = ttk.Frame(container)
+        button_row.grid(row=7, column=0, columnspan=2, sticky="e")
+        ttk.Button(button_row, text="Use selected", command=self._use_selected).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(button_row, text="Save new", command=self._save_new).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(button_row, text="Cancel", command=self._cancel).grid(row=0, column=2)
+
+        self._dialog.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._dialog.bind("<Return>", lambda _event: self._use_selected())
+        self._dialog.bind("<Escape>", lambda _event: self._cancel())
+
+    def show(self) -> Optional[PatientProfile]:
+        self._root.wait_window(self._dialog)
+        return self.result
+
+    def _use_selected(self) -> None:
+        if not self._profiles:
+            messagebox.showerror("No profiles", "Create a new patient profile first.", parent=self._dialog)
+            return
+
+        index = self._existing_combo.current()
+        if index < 0 or index >= len(self._profiles):
+            messagebox.showerror("Selection required", "Please select an existing profile.", parent=self._dialog)
+            return
+
+        self.result = self._profiles[index]
+        self._dialog.destroy()
+
+    def _save_new(self) -> None:
+        first_name = self._first_name_var.get().strip()
+        last_name = self._last_name_var.get().strip()
+        date_of_birth = self._dob_var.get().strip()
+        sex = self._sex_var.get().strip()
+        notes = self._notes_var.get().strip()
+
+        if not first_name or not last_name or not date_of_birth or not sex:
+            messagebox.showerror(
+                "Missing data",
+                "Please fill in first name, last name, date of birth and sex.",
+                parent=self._dialog,
+            )
+            return
+
+        self.result = create_profile(
+            first_name=first_name,
+            last_name=last_name,
+            date_of_birth=date_of_birth,
+            sex=sex,
+            notes=notes,
+        )
+        self._dialog.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self._dialog.destroy()
+
+
+class RecordingInstructionsDialog:
+    """High-contrast modal dialog shown before recording starts."""
+
+    def __init__(self, root: tk.Tk, patient_name: str) -> None:
+        self._root = root
+        self._dialog = tk.Toplevel(root)
+        self._dialog.title("Recording instructions")
+        self._dialog.configure(bg="#000000")
+        self._dialog.resizable(False, False)
+        self._dialog.transient(root)
+        self._dialog.grab_set()
+
+        self.result = False
+
+        container = tk.Frame(self._dialog, bg="#000000", padx=18, pady=18)
+        container.pack(fill="both", expand=True)
+
+        tk.Label(
+            container,
+            text="Before recording",
+            bg="#000000",
+            fg="#FFD400",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+
+        body = (
+            f"Patient: {patient_name}\n\n"
+            "1. Sit still and look at the screen.\n"
+            "2. Follow the highlighted cue.\n"
+            "3. During the imagery phase, imagine only the indicated movement.\n"
+            "4. Do not speak and minimize eye and body movement.\n"
+            "5. Press ESC any time to stop the recording.\n\n"
+            "Continue only when you are ready."
+        )
+        tk.Label(
+            container,
+            text=body,
+            bg="#000000",
+            fg="#FFFFFF",
+            font=("Segoe UI", 12),
+            justify="left",
+            wraplength=540,
+        ).pack(anchor="w", pady=(0, 18))
+
+        button_row = tk.Frame(container, bg="#000000")
+        button_row.pack(anchor="e")
+        tk.Button(
+            button_row,
+            text="Continue",
+            command=self._accept,
+            bg="#FFD400",
+            fg="#000000",
+            activebackground="#FFE766",
+            activeforeground="#000000",
+            relief="flat",
+            padx=14,
+            pady=6,
+        ).pack(side="left", padx=(0, 8))
+        tk.Button(
+            button_row,
+            text="Cancel",
+            command=self._cancel,
+            bg="#222222",
+            fg="#FFFFFF",
+            activebackground="#333333",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=14,
+            pady=6,
+        ).pack(side="left")
+
+        self._dialog.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._dialog.bind("<Return>", lambda _event: self._accept())
+        self._dialog.bind("<Escape>", lambda _event: self._cancel())
+
+    def show(self) -> bool:
+        self._root.wait_window(self._dialog)
+        return self.result
+
+    def _accept(self) -> None:
+        self.result = True
+        self._dialog.destroy()
+
+    def _cancel(self) -> None:
+        self.result = False
+        self._dialog.destroy()
+
+
 class EegAppGui:
     """Enhanced EEG BCI Application GUI with hierarchical navigation."""
     
@@ -48,9 +267,11 @@ class EegAppGui:
         # State
         self._mode_var = tk.StringVar(value="info")  # info, record, offline, online
         self._file_var = tk.StringVar()
+        self._profile_label_var = tk.StringVar(value="No patient selected")
         self._log_queue: queue.Queue[str] = queue.Queue()
         self._task_thread: Optional[threading.Thread] = None
         self._running = False
+        self._patient_profile: Optional[PatientProfile] = None
         
         # Load config for info display
         try:
@@ -61,6 +282,7 @@ class EegAppGui:
         
         self._build_ui()
         self._on_page_change()
+        self._root.after(150, self._prompt_for_patient_profile)
     
     def _build_ui(self) -> None:
         """Build the UI with hierarchical navigation."""
@@ -129,6 +351,20 @@ class EegAppGui:
             ttk.Label(nav_frame, text=config_text, style="Info.TLabel", justify="left").pack(
                 side="top", padx=10, anchor="w"
             )
+
+        ttk.Separator(nav_frame, orient="horizontal").pack(
+            side="top", fill="x", padx=5, pady=10
+        )
+
+        ttk.Label(nav_frame, text="Patient", style="Section.TLabel").pack(
+            side="top", padx=10, pady=(0, 5), anchor="w"
+        )
+        ttk.Label(nav_frame, textvariable=self._profile_label_var, style="Info.TLabel", justify="left").pack(
+            side="top", padx=10, anchor="w"
+        )
+        ttk.Button(nav_frame, text="Select / Create", command=self._prompt_for_patient_profile).pack(
+            side="top", fill="x", padx=5, pady=(6, 0)
+        )
         
         # ── RIGHT CONTENT AREA ─────────────────────────────────────────────
         self._content_frame = ttk.Frame(main_frame)
@@ -256,7 +492,8 @@ Paradigm:
             info,
             text="This mode presents visual stimuli for motor imagery tasks.\n"
                  "EEG data should be recorded using LabRecorder or similar LSL-compatible software.\n"
-                 "Markers will be sent via LSL to synchronize with the visual paradigm.",
+                 "Markers will be sent via LSL to synchronize with the visual paradigm.\n"
+                 "Press ESC during the paradigm to stop the session safely.",
             style="Sub.TLabel",
             justify="left",
         ).pack(anchor="w")
@@ -357,6 +594,25 @@ Paradigm:
         ttk.Button(parent, text="🔴 Start Online BCI", command=self._on_start_online).pack(
             fill="x", pady=20
         )
+
+    def _prompt_for_patient_profile(self) -> None:
+        """Open the modal profile picker and store the selected patient."""
+        dialog = PatientProfileDialog(self._root)
+        profile = dialog.show()
+        if profile is None:
+            if self._patient_profile is None:
+                self._profile_label_var.set("No patient selected")
+            return
+
+        self._patient_profile = profile
+        self._profile_label_var.set(profile.display_name)
+        logger.info("Selected patient profile: %s", profile.display_name)
+
+    def _record_instructions(self) -> bool:
+        """Show pre-recording instructions and confirm start."""
+        profile_name = self._patient_profile.display_name if self._patient_profile else "anonymous patient"
+        dialog = RecordingInstructionsDialog(self._root, profile_name)
+        return dialog.show()
     
     # ── EVENT HANDLERS ─────────────────────────────────────────────────────
     
@@ -371,7 +627,18 @@ Paradigm:
     
     def _on_start_record(self) -> None:
         """Start recording mode."""
-        selection = GuiSelection(mode="record")
+        if self._patient_profile is None:
+            self._prompt_for_patient_profile()
+        if self._patient_profile is None:
+            messagebox.showerror("Patient required", "Please select or create a patient profile before recording.")
+            return
+        if not self._record_instructions():
+            return
+        selection = GuiSelection(
+            mode="record",
+            patient_profile_id=self._patient_profile.profile_id,
+            patient_profile_name=self._patient_profile.display_name,
+        )
         self._start_task(selection)
     
     def _on_start_offline(self) -> None:
@@ -475,6 +742,8 @@ def _run_selection(selection: GuiSelection) -> None:
         from .config import load_config
         
         config = load_config()
+        if selection.patient_profile_name:
+            print(f"Patient: {selection.patient_profile_name} (id={selection.patient_profile_id})")
         streams = create_streams(config)
         paradigm = MotorImageryParadigm(config, streams.marker_outlet)
         paradigm.run()

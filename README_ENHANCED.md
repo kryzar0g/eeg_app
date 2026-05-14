@@ -28,9 +28,21 @@ A flexible, production-ready Brain-Computer Interface system for motor imagery c
 
 ✅ **Robust Online Classification**
 - Real-time EEG processing with configurable buffer
+- Serialized raw-epoch pipeline shared by offline and online mode
 - Feature validation against trained models
-- Mismatch detection (channels, bands)
+- Mismatch detection (channels, epoch length, configuration)
 - Graceful error handling
+
+✅ **Fast CSP-Based Feature Learning**
+- Filter Bank CSP features learned during offline training
+- Optional classic CSP and PSD/Welch fallback for comparison
+- Sliding-window crop augmentation to reduce calibration time
+- Same learned pipeline is reused in online inference via `joblib`
+
+✅ **Patient Profiles**
+- Select an existing patient profile at startup or create a new one
+- Patient metadata is stored as JSON files in `data/patients/`
+- Record mode shows a short instruction screen before the first trial
 
 ## Quick Start
 
@@ -60,6 +72,8 @@ This launches the GUI. Choose a mode from the left navigation:
 2. **Record** - Run motor imagery paradigm (requires LabRecorder)
 3. **Train Model** - Load EEG file and train classifier
 4. **Online BCI** - Real-time classification (requires trained model)
+
+When the GUI starts, it asks you to select an existing patient profile or create a new one. The selected profile is saved as JSON and shown in the sidebar.
 
 ## Configuration
 
@@ -102,12 +116,12 @@ run_app.py
     └── gui: gui_app_v2.py (enhanced UI with navigation)
 
 Core modules:
-├── config.py: Pydantic validation
+├── config.py: Pydantic validation and config aliases
 ├── logging_config.py: Structured logging
 ├── lsl_acquisition.py: LSL stream handling
-├── preprocessing.py: EEG filtering
-├── features.py: Bandpower feature extraction
-├── classifier.py: Model training & evaluation
+├── preprocessing.py: EEG filtering and array preprocessing
+├── features.py: CSP / PSD feature transformers
+├── classifier.py: Model training & evaluation pipeline
 ├── stimuli/paradigm_base.py: Flexible N-class paradigm
 └── online_bci.py: Real-time classification
 ```
@@ -120,8 +134,7 @@ python run_app.py offline -f path/to/eeg_8ch.edf
 ```
 The system automatically:
 - Detects 8 channels
-- Extracts features from all 8 channels
-- Trains LDA classifier
+- Filters each epoch, learns CSP features per band, then trains LDA classifier
 - Saves model to `models/model_latest.joblib`
 
 ### Train Model from 64-Channel EEG
@@ -138,8 +151,31 @@ python run_app.py online
 The system:
 - Connects to EEG stream (auto-detects channels)
 - Loads trained model
-- Validates channel count matches training
+- Reuses the same serialized preprocessing + CSP pipeline from offline training
 - Runs real-time classification
+
+### CSP vs PSD fallback
+- Default feature method is `fbcsp`
+- FBCSP is computed per band and stored inside the saved model pipeline
+- Set `features.method: csp` if you want a single-band CSP baseline
+- Set `features.method: psd` if you want the older Welch/log-bandpower path instead
+- Current FBCSP setup is implemented as per-band one-vs-rest CSP with optional mutual-information selection, so it works best when you retrain on the same class layout used in config
+
+### Faster calibration
+- `training.window_length_sec` controls the model input window length
+- `training.crop_enabled: true` turns on sliding-window augmentation during offline training
+- `training.crop_step_sec` controls the crop stride
+- For lower latency, keep the model window shorter than the recorded imagery interval and let cropping reuse the longer recording
+
+### Shorter recording preset
+- Recommended faster preset for a good speed/reliability trade-off:
+    - `baseline_duration: 1.5`
+    - `cue_duration: 0.8`
+    - `imagery_duration: 3.0`
+    - `iti_duration: 1.5`
+    - `trials_per_class: 36`
+- This reduces one trial from 9.0 s to 6.8 s while still leaving enough imagery time for a 2 s FBCSP window.
+- If you want an even shorter session, lower `trials_per_class` first before shrinking `imagery_duration` below 3 s.
 
 ### Custom Configuration with 3 Classes
 1. Create `config/config_custom.yaml`:
@@ -222,21 +258,24 @@ python run_app.py offline -f data.edf -l DEBUG
 - Streams event markers via LSL
 - You record EEG using LabRecorder or similar
 - Produces synchronized EEG + marker data
+- Shows pre-recording instructions before the first trial and allows stopping with `ESC`
 
 ### Train Mode (Offline Analysis)
 1. Load EEG file (any channel count)
 2. Detect events from CSV or EDF stimulus channel
 3. Create epochs from events
-4. Extract log-bandpower features
-5. Train LDA/SVM classifier
-6. Evaluate on test set (20% by default)
-7. Save model to `models/model_latest.joblib`
+4. Apply notch + band-pass filter, then optional CAR
+5. Crop the epochs into shorter model windows and optionally augment them with overlap
+6. Learn FBCSP features per band, or use CSP/PSD fallback if configured
+7. Train LDA/SVM classifier
+8. Evaluate on test set (20% by default)
+9. Save model to `models/model_latest.joblib`
 
 ### Online BCI Mode
 1. Connect to EEG LSL stream
 2. Load trained model
 3. Buffer incoming data
-4. Extract features in sliding windows
+4. Feed raw epoch windows into the saved pipeline
 5. Predict class and log result
 6. Continue until Ctrl+C
 

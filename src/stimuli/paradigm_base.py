@@ -60,6 +60,33 @@ class MotorImageryParadigm(Paradigm):
         # Create stimulus positions
         self.stimuli = self._create_stimuli()
         self.trials = self._build_trials()
+
+        self._instructions = self.visual.TextStim(
+            self.win,
+            text=(
+                "PŘED MĚŘENÍM\n\n"
+                "1. Sedněte si pohodlně a nehýbejte se.\n"
+                "2. Sledujte zvýrazněný podnět na obrazovce.\n"
+                "3. V imagery fázi si pouze představujte daný pohyb.\n"
+                "4. Nemluvte a omezte pohyby očí i těla na minimum.\n"
+                "5. Ukončení měření: kdykoli stiskněte ESC.\n\n"
+                "Pro pokračování stiskněte MEZERNÍK."
+            ),
+            color="#FFFFFF",
+            height=0.06,
+            wrapWidth=1.5,
+            pos=(0, 0),
+            alignText="center",
+        )
+
+        self._instruction_title = self.visual.TextStim(
+            self.win,
+            text="PŘED MĚŘENÍM",
+            color="#FFD400",
+            height=0.09,
+            pos=(0, 0.56),
+            alignText="center",
+        )
     
     def _create_window(self):
         """Create PsychoPy window with fallback."""
@@ -135,6 +162,19 @@ class MotorImageryParadigm(Paradigm):
         """Draw all stimuli."""
         for stimulus in self.stimuli.values():
             stimulus.draw()
+
+    def _show_instructions(self) -> None:
+        """Show instructions before the first trial."""
+        while True:
+            if "escape" in self.event.getKeys(keyList=["escape"]):
+                raise KeyboardInterrupt("Paradigm aborted before start")
+            if "space" in self.event.getKeys(keyList=["space"]):
+                return
+
+            self._instruction_title.draw()
+            self._instructions.draw()
+            self.win.flip()
+            self.core.wait(0.01)
     
     def run(self) -> None:
         """Run the motor imagery paradigm."""
@@ -149,6 +189,8 @@ class MotorImageryParadigm(Paradigm):
         trial_num = 0
         
         try:
+            self._show_instructions()
+
             for trial in self.trials:
                 if "escape" in self.event.getKeys(keyList=["escape"]):
                     logger.info("Paradigm stopped by user")

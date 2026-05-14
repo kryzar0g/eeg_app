@@ -2,12 +2,12 @@ experiment:
   subject_id: "S001"
   session_id: "session_001"
   # počet trialů na třídu
-  trials_per_class: 40
+  trials_per_class: 36
   # délky intervalů v sekundách
-  baseline_duration: 2.0
-  cue_duration: 1.0
-  imagery_duration: 4.0
-  iti_duration: 2.0
+  baseline_duration: 1.5
+  cue_duration: 0.8
+  imagery_duration: 3.0
+  iti_duration: 1.5
 
 lsl:
   eeg_stream_name: "EEG"
@@ -26,16 +26,26 @@ preprocessing:
   l_freq: 8.0   # dolní mez band-pass filtru (Hz)
   h_freq: 30.0  # horní mez band-pass filtru (Hz)
   notch_freq: 50.0
+  car: true
 
 features:
+  method: "fbcsp"
   bands:
+    - [4.0, 8.0]
     - [8.0, 12.0]
     - [12.0, 30.0]
+    - [30.0, 40.0]
+  csp_components: 2
+  fbcsp_top_k: 8
+
+training:
+  window_length_sec: 2.0
+  crop_enabled: true
+  crop_step_sec: 0.5
 
 classifier:
-  type: "lda"  # "lda" nebo "svm"
+  algorithm: "lda"  # "lda" nebo "svm"
   test_size: 0.2
-  random_state: 42
 
 events:
   # režim získávání událostí: "stim" (kanál v EDF/BDF) nebo "csv"
