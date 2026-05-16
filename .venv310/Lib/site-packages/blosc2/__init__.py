@@ -37,6 +37,11 @@ if not IS_WASM:
 
 from .version import __array_api_version__, __version__
 
+_PACKAGE_DIR = str(Path(__file__).resolve().parent)
+if _PACKAGE_DIR in __path__:
+    __path__.remove(_PACKAGE_DIR)
+__path__.insert(0, _PACKAGE_DIR)
+
 
 def _configure_libtcc_runtime_path():
     """Best-effort configuration so miniexpr can find bundled libtcc at runtime."""
@@ -80,6 +85,30 @@ __array_api_version__ = __array_api_version__
 """
 Python-Blosc2 version.
 """
+
+
+def get_matmul_library() -> str | None:
+    """
+    Return the library used by the active matmul fast backend, if any.
+
+    Returns
+    -------
+    str | None
+        ``"Accelerate.framework"`` when the selected backend is Accelerate,
+        the loaded CBLAS library path for runtime-discovered CBLAS backends,
+        or ``None`` when the selected backend is ``naive``.
+    """
+    from . import blosc2_ext
+
+    selected_backend = blosc2_ext.get_selected_matmul_block_backend()
+    if selected_backend == "accelerate":
+        return "Accelerate.framework"
+    if selected_backend == "cblas":
+        get_loaded_cblas = getattr(blosc2_ext, "get_loaded_matmul_cblas_library", None)
+        if get_loaded_cblas is None:
+            return None
+        return get_loaded_cblas()
+    return None
 
 
 class Codec(Enum):
@@ -186,6 +215,23 @@ class FPAccuracy(Enum):
     DEFAULT = MEDIUM
 
 
+class IndexKind(Enum):
+    """
+    Available index kinds.
+    """
+
+    #: Segment summaries only. Cheapest to build and smallest on disk.
+    SUMMARY = "summary"
+    #: Bucketed chunk-local payloads for approximate pruning before exact evaluation.
+    BUCKET = "bucket"
+    #: Locally ordered payloads that provide exact positional matches for filtering.
+    PARTIAL = "partial"
+    #: Globally ordered payloads for exact filtering and direct ordered reuse.
+    FULL = "full"
+    #: Tunable iterative-ordering payloads for exact filtering; not a full/CSI index.
+    OPSI = "opsi"
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -248,7 +294,7 @@ VERSION_STRING = VERSION_STRING
 The C-Blosc2 version's string."""
 
 if IS_WASM:
-    from ._wasm_jit import init_wasm_jit_helpers
+    from .wasm_jit import init_wasm_jit_helpers
 
     _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
@@ -332,28 +378,17 @@ object_ = np.object_
 
 from numpy import (
     bool_,
-    complex64,
     complex128,
     e,
     euler_gamma,
     float16,
-    float32,
     float64,
     inf,
-    int8,
-    int16,
-    int32,
     int64,
     nan,
     newaxis,
     pi,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
 )
-
-bool = bool
 
 DEFAULT_COMPLEX = complex128
 """
@@ -504,7 +539,8 @@ from .ndarray import (
     eye,
     asarray,
     astype,
-    indices,
+    argsort,
+    iter_sorted,
     sort,
     reshape,
     copy,
@@ -530,6 +566,11 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
+from .batch_array import Batch, BatchArray
+from .list_array import ListArray
+from .objectarray import ObjectArray, objectarray_from_cframe
+from .ref import Ref
+from .b2objects import open_b2object
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -540,7 +581,7 @@ from .lazyexpr import (
     lazyexpr,
     LazyArray,
     LazyUDF,
-    _open_lazyarray,
+    open_lazyarray,
     get_expr_operands,
     validate_expr,
     evaluate,
@@ -548,8 +589,9 @@ from .lazyexpr import (
     can_cast,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
+from .indexing import Index
 
-from .schunk import SChunk, open
+from .schunk import SChunk, load, open
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -588,7 +630,10 @@ _disable_overloaded_equal = False
 Disable the overloaded equal operator.
 """
 
-# Delayed imports for avoiding overwriting of python builtins
+# Delayed imports for avoiding overwriting of python builtins.
+# Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
+# they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
+from .ctable import DEFAULT_NULL_POLICY, Column, CTable, NullPolicy, get_null_policy, null_policy
 from .ndarray import (
     abs,
     acos,
@@ -690,6 +735,29 @@ from .ndarray import (
     var,
     where,
 )
+from .schema import (
+    bool,
+    bytes,
+    complex64,
+    complex128,
+    field,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    list,
+    object,
+    string,
+    struct,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    vlbytes,
+    vlstring,
+)
 
 __all__ = [  # noqa : RUF022
     # Constants
@@ -704,26 +772,54 @@ __all__ = [  # noqa : RUF022
     "DEFAULT_FLOAT",
     "DEFAULT_INDEX",
     "DEFAULT_INT",
+    "DEFAULT_NULL_POLICY",
     # Mathematical constants
     "e",
     "pi",
     "inf",
     "nan",
     "newaxis",
+    # Schema API (CTable)
+    "bool",
+    "bytes",
+    "complex64",
+    "complex128",
+    "field",
+    "float32",
+    "float64",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "list",
+    "object",
+    "string",
+    "struct",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "vlbytes",
+    "vlstring",
     # Classes
     "C2Array",
     "CParams",
+    "Batch",
+    "BatchArray",
     # Enums
     "Codec",
     "DParams",
     "DictStore",
     "EmbedStore",
     "Filter",
+    "Index",
     "LazyArray",
     "DSLKernel",
     "DSLSyntaxError",
     "LazyExpr",
     "LazyUDF",
+    "ListArray",
+    "NullPolicy",
     "NDArray",
     "NDField",
     "Operand",
@@ -731,6 +827,7 @@ __all__ = [  # noqa : RUF022
     "ProxyNDField",
     "ProxyNDSource",
     "ProxySource",
+    "Ref",
     "SChunk",
     "SimpleProxy",
     "SpecialValue",
@@ -739,6 +836,7 @@ __all__ = [  # noqa : RUF022
     "TreeStore",
     "Tuner",
     "URLPath",
+    "ObjectArray",
     # Version
     "__version__",
     # Utils
@@ -827,6 +925,7 @@ __all__ = [  # noqa : RUF022
     "get_compressor",
     "get_cpu_info",
     "get_expr_operands",
+    "get_matmul_library",
     "get_slice_nchunks",
     "greater",
     "greater_equal",
@@ -847,6 +946,7 @@ __all__ = [  # noqa : RUF022
     "less",
     "less_equal",
     "linspace",
+    "load",
     "load_array",
     "load_tensor",
     "log",
@@ -934,7 +1034,10 @@ __all__ = [  # noqa : RUF022
     "validate_expr",
     "var",
     "vecdot",
+    "objectarray_from_cframe",
     "where",
     "zeros",
     "zeros_like",
+    "get_null_policy",
+    "null_policy",
 ]

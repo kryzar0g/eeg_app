@@ -166,7 +166,7 @@ def _replace_scalar_names_preserving_source(
     return out
 
 
-def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):  # noqa: C901
+def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
     """Fold float(<number>) and int(<number>) calls into literals.
 
     miniexpr parses DSL function calls in a restricted way, and scalar specialization can
@@ -257,7 +257,7 @@ def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
     return specialize_miniexpr_inputs(expr_string, operands)
 
 
-class _DSLValidator:
+class DSLValidator:
     _binop_map: ClassVar[dict[type[ast.operator], str]] = {
         ast.Add: "+",
         ast.Sub: "-",
@@ -490,8 +490,12 @@ class DSLKernel:
         try:
             dsl_source, input_names = self._extract_dsl(func)
         except DSLSyntaxError as e:
-            dsl_source = None
-            input_names = None
+            # Preserve extracted source/signature for diagnostics even when DSL validation fails.
+            try:
+                dsl_source, input_names = self._extract_dsl(func, validate=False)
+            except Exception:
+                dsl_source = None
+                input_names = None
             self.dsl_error = e
         except Exception:
             dsl_source = None
@@ -499,7 +503,7 @@ class DSLKernel:
         self.dsl_source = dsl_source
         self.input_names = input_names
 
-    def _extract_dsl(self, func):
+    def _extract_dsl(self, func, validate: bool = True):
         source = inspect.getsource(func)
         source = textwrap.dedent(source)
         tree = ast.parse(source)
@@ -521,7 +525,8 @@ class DSLKernel:
         dsl_func = next((node for node in dsl_tree.body if isinstance(node, ast.FunctionDef)), None)
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
-        _DSLValidator(dsl_source).validate(dsl_func)
+        if validate:
+            DSLValidator(dsl_source).validate(dsl_func)
         input_names = self._input_names_from_signature(dsl_func)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")
@@ -608,7 +613,7 @@ def validate_dsl(func):
     }
 
 
-class _DSLBuilder:
+class DSLBuilder:
     _binop_map: ClassVar[dict[type[ast.operator], str]] = {
         ast.Add: "+",
         ast.Sub: "-",
@@ -847,9 +852,9 @@ class _DSLBuilder:
         raise ValueError("Unsupported comparison in DSL")
 
 
-class _DSLReducer:
-    _binop_map: ClassVar[dict[type[ast.operator], str]] = _DSLBuilder._binop_map
-    _cmp_map: ClassVar[dict[type[ast.cmpop], str]] = _DSLBuilder._cmp_map
+class DSLReducer:
+    _binop_map: ClassVar[dict[type[ast.operator], str]] = DSLBuilder._binop_map
+    _cmp_map: ClassVar[dict[type[ast.cmpop], str]] = DSLBuilder._cmp_map
 
     def __init__(self, max_unroll: int = 64):
         self._env: dict[str, str] = {}

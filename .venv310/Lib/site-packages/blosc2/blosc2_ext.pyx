@@ -7,10 +7,15 @@
 
 #cython: language_level=3
 
+import glob
 import os
+import dataclasses
 import ast
 import atexit
 import pathlib
+import sys
+import time
+import warnings
 
 import _ctypes
 
@@ -42,7 +47,6 @@ cimport numpy as np
 
 np.import_array()
 
-
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t
     ctypedef   signed short int16_t
@@ -53,8 +57,106 @@ cdef extern from "<stdint.h>":
     ctypedef unsigned int   uint32_t
     ctypedef unsigned long long uint64_t
 
+ctypedef fused T:
+    float
+    double
+    int32_t
+    int64_t
+
+
 cdef extern from "<stdio.h>":
     int printf(const char *format, ...) nogil
+
+cdef extern from "matmul_kernels.h":
+    ctypedef enum b2_matmul_backend:
+        B2_MATMUL_BACKEND_AUTO
+        B2_MATMUL_BACKEND_NAIVE
+        B2_MATMUL_BACKEND_ACCELERATE
+        B2_MATMUL_BACKEND_CBLAS
+
+    int b2_has_accelerate() nogil
+    int b2_has_cblas() nogil
+    void b2_clear_cblas_candidates()
+    int b2_add_cblas_candidate(const char *path)
+    int b2_init_cblas()
+    void b2_set_matmul_backend(int backend) nogil
+    int b2_get_matmul_backend() nogil
+    int b2_get_selected_matmul_backend() nogil
+    const char *b2_get_matmul_backend_name() nogil
+    const char *b2_get_selected_matmul_backend_name() nogil
+    const char *b2_get_loaded_cblas_path() nogil
+    int b2_gemm_accelerate_f32(const float *a, const float *b, float *c, int m, int k, int n) nogil
+    int b2_gemm_accelerate_f64(const double *a, const double *b, double *c, int m, int k, int n) nogil
+    int b2_gemm_cblas_f32(const float *a, const float *b, float *c, int m, int k, int n) nogil
+    int b2_gemm_cblas_f64(const double *a, const double *b, double *c, int m, int k, int n) nogil
+
+
+def _discover_matmul_cblas_candidates():
+    if sys.platform == "darwin":
+        return []
+
+    prefix = pathlib.Path(sys.prefix)
+    if sys.platform.startswith("win"):
+        libdirs = [prefix / "Library" / "bin", prefix / "Library" / "lib", prefix / "DLLs"]
+        patterns = [
+            "mkl_rt.dll",
+            "libopenblas*.dll",
+            "openblas*.dll",
+            "cblas.dll",
+            "blas.dll",
+        ]
+    else:
+        libdirs = [prefix / "lib", prefix / "lib64"]
+        patterns = [
+            "libcblas.so",
+            "libcblas.so.*",
+            "libopenblas.so",
+            "libopenblas.so.*",
+            "libflexiblas.so",
+            "libflexiblas.so.*",
+            "libblis.so",
+            "libblis.so.*",
+            "libmkl_rt.so",
+            "libmkl_rt.so.*",
+            "libblas.so",
+            "libblas.so.*",
+        ]
+
+    try:
+        config = np.show_config(mode="dicts")
+        blas_cfg = config.get("Build Dependencies", {}).get("blas", {})
+        libdir = blas_cfg.get("lib directory")
+        if libdir:
+            libdirs.insert(0, pathlib.Path(libdir))
+    except Exception:
+        pass
+
+    candidates = []
+    seen = set()
+    for libdir in libdirs:
+        if not libdir.exists():
+            continue
+        for pattern in patterns:
+            for match in sorted(glob.glob(str(libdir / pattern))):
+                resolved = pathlib.Path(match).resolve()
+                path = str(resolved)
+                if path not in seen and resolved.exists():
+                    seen.add(path)
+                    candidates.append(path)
+    return candidates
+
+
+def _configure_matmul_cblas_backend():
+    cdef bytes path_bytes
+
+    b2_clear_cblas_candidates()
+    for path in _discover_matmul_cblas_candidates():
+        path_bytes = os.fsencode(path)
+        b2_add_cblas_candidate(path_bytes)
+    b2_init_cblas()
+
+
+_configure_matmul_cblas_backend()
 
 cdef extern from "blosc2.h":
 
@@ -279,8 +381,16 @@ cdef extern from "blosc2.h":
             blosc2_context * context, const void * src, int32_t srcsize, void * dest,
             int32_t destsize) nogil
 
+    int blosc2_vlcompress_ctx(
+            blosc2_context * context, const void * const * srcs, const int32_t * srcsizes,
+            int32_t nblocks, void * dest, int32_t destsize) nogil
+
     int blosc2_decompress_ctx(blosc2_context * context, const void * src,
                               int32_t srcsize, void * dest, int32_t destsize) nogil
+
+    int blosc2_vldecompress_ctx(blosc2_context* context, const void* src,
+                                int32_t srcsize, void** dests,
+                                int32_t* destsizes, int32_t maxblocks)
 
     int blosc2_getitem_ctx(blosc2_context* context, const void* src,
                            int32_t srcsize, int start, int nitems, void* dest,
@@ -363,10 +473,10 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset)
     blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio)
 
-    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free)
+    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
-    int64_t blosc2_schunk_free(blosc2_schunk *schunk)
+    int64_t blosc2_schunk_free(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
@@ -381,6 +491,8 @@ cdef extern from "blosc2.h":
                                 c_bool *needs_free) nogil
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     c_bool *needs_free) nogil
+    int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
+                                  uint8_t **dest, int32_t *destsize)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
@@ -407,6 +519,9 @@ cdef extern from "blosc2.h":
                           uint8_t **content, int32_t *content_len)
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
     int blosc2_vlmeta_get_names(blosc2_schunk *schunk, char **names)
+    int blosc2_vldecompress_block_ctx(blosc2_context* context, const void* src,
+                                      int32_t srcsize, int32_t nblock, uint8_t** dest,
+                                      int32_t* destsize)
 
 
     int blosc1_get_blocksize()
@@ -669,6 +784,13 @@ ctypedef struct me_udata:
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
     me_expr* miniexpr_handle
 
+ctypedef struct mm_udata:
+    b2nd_array_t** inputs
+    b2nd_array_t* array
+    int64_t chunks_strides[3][B2ND_MAX_DIM]
+    int64_t blocks_strides[3][B2ND_MAX_DIM]
+    int64_t el_strides[3][B2ND_MAX_DIM]
+
 MAX_TYPESIZE = BLOSC2_MAXTYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
 MAX_BLOCKSIZE = BLOSC2_MAXBLOCKSIZE
@@ -700,7 +822,7 @@ def destroy():
     blosc2_destroy()
 
 
-def _register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
+def register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
     cdef me_wasm_jit_instantiate_helper instantiate_helper = (
         <me_wasm_jit_instantiate_helper>instantiate_ptr
     )
@@ -982,7 +1104,7 @@ cdef _check_cparams(blosc2_cparams *cparams):
             if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
-        if cparams.prefilter != NULL and cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter:
+        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter):
             # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
@@ -1015,7 +1137,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
     cparams.typesize = typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
-    cparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    cparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        cparams.nthreads = 1
     cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
     cparams.splitmode = splitmode.value
@@ -1095,7 +1219,10 @@ def compress2(src, **kwargs):
     return dest[:size]
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
-    dparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    memcpy(dparams, &BLOSC2_DPARAMS_DEFAULTS, sizeof(BLOSC2_DPARAMS_DEFAULTS))
+    dparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        dparams.nthreads = 1
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
@@ -1120,6 +1247,7 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
+    cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer buf
     if dst is not None:
@@ -1128,11 +1256,13 @@ def decompress2(src, dst=None, **kwargs):
             blosc2_free_ctx(dctx)
             raise ValueError("The dst length must be greater than 0")
         view = <void*>&typed_view_src[0]
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
         if RELEASEGIL:
             with nogil:
-                size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
+                size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
         else:
-            size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
+            size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
         blosc2_free_ctx(dctx)
         PyBuffer_Release(&buf)
     else:
@@ -1142,16 +1272,173 @@ def decompress2(src, dst=None, **kwargs):
             raise RuntimeError("Could not get a bytes object")
         dst_buf = <char*>dst
         view = <void*>&typed_view_src[0]
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
         if RELEASEGIL:
             with nogil:
-                size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+                size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
         else:
-            size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+            size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
         blosc2_free_ctx(dctx)
         if size >= 0:
             return dst
     if size < 0:
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
+
+
+def vlcompress(srcs, **kwargs):
+    cdef blosc2_cparams cparams
+    create_cparams_from_kwargs(&cparams, kwargs)
+
+    cdef Py_ssize_t nblocks = len(srcs)
+    if nblocks <= 0:
+        raise ValueError("At least one block is required")
+
+    cdef blosc2_context *cctx = NULL
+    cdef Py_buffer *buffers = <Py_buffer*>calloc(nblocks, sizeof(Py_buffer))
+    cdef const void **src_ptrs = <const void **>malloc(nblocks * sizeof(void *))
+    cdef int32_t *srcsizes = <int32_t*>malloc(nblocks * sizeof(int32_t))
+    cdef Py_ssize_t acquired = 0
+    cdef Py_ssize_t i
+    cdef int64_t total_nbytes = 0
+    cdef int32_t len_dest
+    cdef int size
+    cdef Py_ssize_t release_i
+    cdef void *_dest
+    if buffers == NULL or src_ptrs == NULL or srcsizes == NULL:
+        free(buffers)
+        free(src_ptrs)
+        free(srcsizes)
+        raise MemoryError()
+
+    try:
+        for i in range(nblocks):
+            PyObject_GetBuffer(srcs[i], &buffers[i], PyBUF_SIMPLE)
+            acquired += 1
+            if buffers[i].len <= 0:
+                raise ValueError("Each VL block must have at least one byte")
+            src_ptrs[i] = buffers[i].buf
+            srcsizes[i] = <int32_t>buffers[i].len
+            total_nbytes += buffers[i].len
+
+        # VL blocks can carry enough per-block framing that the simple
+        # total_nbytes + global_overhead estimate is too small for many tiny
+        # buffers.  Budget one max-overhead chunk per block as a conservative
+        # upper bound for the temporary destination.
+        len_dest = <int32_t>(total_nbytes + BLOSC2_MAX_OVERHEAD * (nblocks + 1) + 64)
+        dest = PyBytes_FromStringAndSize(NULL, len_dest)
+        if dest is None:
+            raise MemoryError()
+        _dest = <void*><char *>dest
+        cctx = blosc2_create_cctx(cparams)
+        if cctx == NULL:
+            raise RuntimeError("Could not create the compression context")
+        if RELEASEGIL:
+            with nogil:
+                size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
+        else:
+            size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
+    finally:
+        if cctx != NULL:
+            blosc2_free_ctx(cctx)
+        for release_i in range(acquired):
+            PyBuffer_Release(&buffers[release_i])
+        free(buffers)
+        free(src_ptrs)
+        free(srcsizes)
+
+    if size < 0:
+        raise RuntimeError("Could not compress the data")
+    elif size == 0:
+        del dest
+        raise RuntimeError("The result could not fit ")
+    return dest[:size]
+
+
+def vldecompress(src, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
+
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t nblocks
+    cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &nblocks)
+    if nblocks <= 0:
+        blosc2_free_ctx(dctx)
+        raise ValueError("Chunk does not contain VL blocks")
+
+    cdef void **dests = <void**>calloc(nblocks, sizeof(void *))
+    cdef int32_t *destsizes = <int32_t*>malloc(nblocks * sizeof(int32_t))
+    cdef int32_t rc
+    cdef int32_t i
+    cdef list out = []
+    if dests == NULL or destsizes == NULL:
+        blosc2_free_ctx(dctx)
+        free(dests)
+        free(destsizes)
+        raise MemoryError()
+
+    try:
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
+        rc = blosc2_vldecompress_ctx(dctx, <void*>&typed_view_src[0], srcsize, dests, destsizes, nblocks)
+        if rc < 0:
+            raise RuntimeError("Could not decompress the data")
+        for i in range(rc):
+            out.append(PyBytes_FromStringAndSize(<char*>dests[i], destsizes[i]))
+            free(dests[i])
+            dests[i] = NULL
+        return out
+    finally:
+        for i in range(nblocks):
+            if dests[i] != NULL:
+                free(dests[i])
+        free(dests)
+        free(destsizes)
+        blosc2_free_ctx(dctx)
+
+
+def vldecompress_block(src, int32_t nblock, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
+
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+
+    cdef uint8_t *dest = NULL
+    cdef int32_t destsize = 0
+    cdef int32_t rc
+    try:
+        rc = blosc2_vldecompress_block_ctx(
+            dctx,
+            <void*>&typed_view_src[0],
+            <int32_t>typed_view_src.nbytes,
+            nblock,
+            &dest,
+            &destsize,
+        )
+        if rc < 0:
+            raise RuntimeError("Could not decompress the block")
+        return PyBytes_FromStringAndSize(<char*>dest, destsize)
+    finally:
+        if dest != NULL:
+            free(dest)
+        blosc2_free_ctx(dctx)
 
 
 cdef create_storage(blosc2_storage *storage, kwargs):
@@ -1297,6 +1584,10 @@ cdef class SChunk:
         cdef int64_t index
         cdef Py_buffer buf
         cdef uint8_t *buf_ptr
+        cdef int comp_size
+        cdef int32_t csize
+        cdef uint8_t* chunk
+        cdef int32_t len_chunk
         if data is not None and len(data) > 0:
             PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
             buf_ptr = <uint8_t *> buf.buf
@@ -1307,8 +1598,27 @@ cdef class SChunk:
                 if i == (nchunks - 1):
                     len_chunk = len_data - i * chunksize
                 index = i * chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, buf_ptr + index, len_chunk)
+                csize = <int32_t> (len_chunk + BLOSC2_MAX_OVERHEAD)
+                chunk = <uint8_t*> malloc(csize)
+                self.schunk.current_nchunk = i
+                if RELEASEGIL:
+                    with nogil:
+                        comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
+                else:
+                    comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
+                if comp_size < 0:
+                    free(chunk)
+                    PyBuffer_Release(&buf)
+                    raise RuntimeError("Could not compress the data")
+                elif comp_size == 0:
+                    free(chunk)
+                    PyBuffer_Release(&buf)
+                    raise RuntimeError("The result could not fit")
+                chunk = <uint8_t*> realloc(chunk, comp_size)
+                _check_comp_length('chunk', comp_size)
+                nchunks_ = blosc2_schunk_append_chunk(self.schunk, chunk, False)
                 if nchunks_ != (i + 1):
+                    free(chunk)
                     PyBuffer_Release(&buf)
                     raise RuntimeError("An error occurred while appending the chunks")
             PyBuffer_Release(&buf)
@@ -1443,10 +1753,28 @@ cdef class SChunk:
     def append_data(self, data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
-        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
+        cdef int size
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
+        cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        self.schunk.current_nchunk = self.schunk.nchunks
+        if RELEASEGIL:
+            with nogil:
+                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+        else:
+            size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
+        if size < 0:
+            free(chunk)
+            raise RuntimeError("Could not compress the data")
+        elif size == 0:
+            free(chunk)
+            raise RuntimeError("The result could not fit")
+        chunk = <uint8_t*> realloc(chunk, size)
+        _check_comp_length('chunk', size)
+        rc = blosc2_schunk_append_chunk(self.schunk, chunk, False)
         if rc < 0:
-            raise RuntimeError("Could not append the buffer")
+            free(chunk)
+            raise RuntimeError("Could not append the chunk")
         return rc
 
     def fill_special(self, nitems, special_value, value):
@@ -1559,10 +1887,30 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
+    def get_vlblock(self, nchunk, nblock):
+        cdef uint8_t *block
+        cdef int32_t destsize
+        cbytes = blosc2_schunk_get_vlblock(self.schunk, nchunk, nblock, &block, &destsize)
+        if cbytes < 0:
+            raise RuntimeError("Error while getting the vlblock")
+        ret_block = PyBytes_FromStringAndSize(<char*>block, destsize)
+        free(block)
+        return ret_block
+
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
         if rc < 0:
             raise RuntimeError("Could not delete the desired chunk")
+        return rc
+
+    def append_chunk(self, chunk):
+        cdef const uint8_t[:] typed_view_chunk
+        mem_view_chunk = memoryview(chunk)
+        typed_view_chunk = mem_view_chunk.cast('B')
+        _check_comp_length('chunk', len(typed_view_chunk))
+        rc = blosc2_schunk_append_chunk(self.schunk, &typed_view_chunk[0], True)
+        if rc < 0:
+            raise RuntimeError("Could not append the desired chunk")
         return rc
 
     def insert_chunk(self, nchunk, chunk):
@@ -1614,6 +1962,13 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
         return rc
+
+    def reorder_offsets(self, order):
+        cdef np.ndarray[np.int64_t, ndim=1] offsets_order = np.ascontiguousarray(order, dtype=np.int64)
+        rc = blosc2_schunk_reorder_offsets(self.schunk, <int64_t*> offsets_order.data)
+        if rc < 0:
+            raise RuntimeError("Could not reorder the chunk offsets")
+        return None
 
     def update_data(self, nchunk, data, copy):
         cdef Py_buffer buf
@@ -1700,6 +2055,10 @@ cdef class SChunk:
         cdef int64_t data_start
         cdef uint8_t *data
         cdef uint8_t *chunk
+        cdef int32_t alloc_len
+        cdef int32_t chunk_nbytes
+        cdef int32_t chunksize
+        cdef int comp_rc
         if buf.len < nbytes:
             raise ValueError("Not enough data for writing the slice")
 
@@ -1719,18 +2078,30 @@ cdef class SChunk:
                 rc = blosc2_schunk_decompress_chunk(self.schunk, self.schunk.nchunks - 1, data, chunk_nbytes)
                 if rc < 0:
                     free(data)
+                    PyBuffer_Release(&buf)
                     raise RuntimeError("Error while decompressing the chunk")
                 data_start = self.schunk.nbytes - (self.schunk.nchunks - 1) * self.schunk.chunksize
                 memcpy(data + data_start, buf_ptr + buf_pos, nbytes_copy)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
-                rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                self.schunk.current_nchunk = self.schunk.nchunks - 1
+                if RELEASEGIL:
+                    with nogil:
+                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                else:
+                    comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 free(data)
-                if rc < 0:
+                if comp_rc < 0:
                     free(chunk)
+                    PyBuffer_Release(&buf)
                     raise RuntimeError("Error while compressing the data")
+                elif comp_rc == 0:
+                    free(chunk)
+                    PyBuffer_Release(&buf)
+                    raise RuntimeError("The result could not fit")
                 rc = blosc2_schunk_update_chunk(self.schunk, self.schunk.nchunks - 1, chunk, True)
                 free(chunk)
                 if rc < 0:
+                    PyBuffer_Release(&buf)
                     raise RuntimeError("Error while updating the chunk")
                 buf_pos += nbytes_copy
             # Append data if needed
@@ -1743,8 +2114,28 @@ cdef class SChunk:
                         chunksize = self.schunk.chunksize
                     else:
                         chunksize = (stop * self.schunk.typesize) % self.schunk.chunksize
-                    rc = blosc2_schunk_append_buffer(self.schunk, buf_ptr + buf_pos, chunksize)
+                    alloc_len = <int32_t> (chunksize + BLOSC2_MAX_OVERHEAD)
+                    chunk = <uint8_t*> malloc(alloc_len)
+                    self.schunk.current_nchunk = self.schunk.nchunks
+                    if RELEASEGIL:
+                        with nogil:
+                            comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
+                    else:
+                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
+                    if comp_rc < 0:
+                        free(chunk)
+                        PyBuffer_Release(&buf)
+                        raise RuntimeError("Error while compressing the chunk")
+                    elif comp_rc == 0:
+                        free(chunk)
+                        PyBuffer_Release(&buf)
+                        raise RuntimeError("The result could not fit")
+                    chunk = <uint8_t*> realloc(chunk, comp_rc)
+                    _check_comp_length('chunk', comp_rc)
+                    rc = blosc2_schunk_append_chunk(self.schunk, chunk, False)
                     if rc < 0:
+                        free(chunk)
+                        PyBuffer_Release(&buf)
                         raise RuntimeError("Error while appending the chunk")
                     buf_pos += chunksize
         else:
@@ -1756,7 +2147,12 @@ cdef class SChunk:
     def to_cframe(self):
         cdef c_bool needs_free
         cdef uint8_t *cframe
-        cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
+        cdef int64_t cframe_len
+        if RELEASEGIL:
+            with nogil:
+                cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
+        else:
+            cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
         if cframe_len < 0:
             raise RuntimeError("Error while getting the cframe")
         out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
@@ -1903,6 +2299,7 @@ cdef class SChunk:
     cpdef remove_prefilter(self, func_name, _new_ctx=True):
         cdef udf_udata* udf_data
         cdef user_filters_udata* udata
+        cdef mm_udata* mm_data
 
         if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
@@ -1924,6 +2321,13 @@ cdef class SChunk:
                     if me_data.eval_params != NULL:
                         free(me_data.eval_params)
                     free(me_data)
+        elif self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>matmul_prefilter:
+            if self.schunk.storage.cparams.preparams != NULL:
+                mm_data = <mm_udata*>self.schunk.storage.cparams.preparams.user_data
+                if mm_data != NULL:
+                    if mm_data.inputs != NULL:
+                        free(mm_data.inputs)
+                    free(mm_data)
         elif self.schunk.storage.cparams.prefilter != NULL:
             # From Python the preparams->udata with always have the field py_func
             if self.schunk.storage.cparams.preparams != NULL:
@@ -1950,6 +2354,7 @@ cdef class SChunk:
             self.schunk.cctx = NULL
 
     def __dealloc__(self):
+        cdef blosc2_schunk *schunk_ptr
         if self.schunk != NULL and not self._is_view:
             # Free prefilters and postfilters params
             if self.schunk.storage.cparams.prefilter != NULL:
@@ -1957,7 +2362,15 @@ cdef class SChunk:
             if self.schunk.storage.dparams.postfilter != NULL:
                 self.remove_postfilter(func_name=None, _new_ctx=False)
 
-            blosc2_schunk_free(self.schunk)
+            # Release the GIL while freeing the C-Blosc2 super-chunk.
+            # blosc2_schunk_free -> blosc2_free_ctx -> release_threadpool
+            # joins worker pthreads; holding the GIL here can cause hangs
+            # when thousands of SChunks are finalized at once (e.g. during
+            # gc.collect() in Python 3.14+ where gen-2 threshold is 0).
+            schunk_ptr = self.schunk
+            self.schunk = NULL
+            with nogil:
+                blosc2_schunk_free(schunk_ptr)
 
 
 # postfilter
@@ -2017,7 +2430,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef b2nd_array_t* ndarr
     cdef int rc
     cdef void** input_buffers = <void**> malloc(udata.ninputs * sizeof(uint8_t*))
-    cdef float *buf
     cdef uint8_t* src
     cdef uint8_t* chunk
     cdef c_bool needs_free
@@ -2143,6 +2555,227 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     return 0
 
+cdef int matmul_block_kernel(T* A, T* B, T* C, int M, int K, int N) nogil:
+    cdef int r, c, k
+    cdef T a
+    cdef int rowA, rowC, rowB
+    for r in range(M):
+        rowA = r * K
+        rowC = r * N
+        for k in range(K):
+            a = A[rowA + k]
+            rowB = k * N
+            for c in range(N):
+                C[rowC + c] += <T>(a * B[rowB + c])
+    return 0
+
+cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *params_output, int32_t typesize, int typecode) nogil:
+    # Declare all C variables at the beginning
+    cdef b2nd_array_t* out_arr
+    cdef b2nd_array_t* ndarr
+    cdef c_bool first_run
+    cdef int rc, p, q, r
+    cdef void** input_buffers = <void**> malloc(2 * sizeof(uint8_t*))
+    cdef uint8_t** src = <uint8_t**> malloc(2 * sizeof(uint8_t*))
+    cdef int32_t chunk_nbytes[2]
+    cdef int32_t chunk_cbytes[2]
+    cdef int32_t block_nbytes[2]
+    cdef int blocknitems[2]
+    cdef int startA, startB, expected_blocknitems
+    cdef blosc2_context* dctx
+    cdef int i, j, block_i, block_j, chunk_i, chunk_j, ncols, block_ncols, Bblock_ncols, Bncols, Ablock_ncols, Ancols
+    cdef int nchunkA = 0, nchunkB = 0, nblockA = 0, nblockB = 0, offsetA = 0, offsetB = 0, offset = 0
+    out_arr = udata.array
+    cdef int ndim = out_arr.ndim
+    cdef int nchunk_ = nchunk
+    cdef int coord, batch, batch_, batches = 1
+    cdef int out_chunk_nrows, out_chunk_ncols, out_block_nrows, out_block_ncols
+    cdef int selected_backend = b2_get_selected_matmul_backend()
+
+    # batches = sum(strides[i]*elcoords[i])
+    for i in range(ndim - 2):
+        batches *= out_arr.blockshape[i]
+
+    # nchunk = sum(strides[i]*chunkcoords[i])
+    for i in range(ndim - 2):
+        coord = nchunk_ // udata.chunks_strides[0][i]
+        nchunk_ = nchunk_ % udata.chunks_strides[0][i]
+        nchunkA += coord * udata.chunks_strides[1][i]
+        nchunkB += coord * udata.chunks_strides[2][i]
+
+    ncols = udata.chunks_strides[0][ndim - 2]
+    Ancols = udata.chunks_strides[1][ndim - 2]
+    Bncols = udata.chunks_strides[2][ndim - 2]
+    out_chunk_nrows = out_arr.chunkshape[ndim - 2]
+    out_chunk_ncols = out_arr.chunkshape[ndim - 1]
+
+    # nblock = sum(strides[i]*blockcoords[i])
+    cdef int nblock_ = nblock
+    for i in range(ndim - 2):
+        coord = nblock_ // udata.blocks_strides[0][i]
+        nblock_ = nblock_ % udata.blocks_strides[0][i]
+        nblockA += coord * udata.blocks_strides[1][i]
+        nblockB += coord * udata.blocks_strides[2][i]
+
+    block_ncols = udata.blocks_strides[0][ndim - 2]
+    Ablock_ncols = udata.blocks_strides[1][ndim - 2]
+    Bblock_ncols = udata.blocks_strides[2][ndim - 2]
+    out_block_nrows = out_arr.blockshape[ndim - 2]
+    out_block_ncols = out_arr.blockshape[ndim - 1]
+
+    memset(params_output, 0, out_arr.blocknitems * typesize)
+
+    dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+
+    first_run = True
+    while True: # chunk loop
+        for i in range(2):
+            chunk_idx = nchunkA if i == 0 else nchunkB
+            ndarr = udata.inputs[i]
+            ndim = ndarr.ndim
+            src[i] = ndarr.sc.data[chunk_idx]
+            rc = blosc2_cbuffer_sizes(src[i], &chunk_nbytes[i], &chunk_cbytes[i], &block_nbytes[i])
+            if rc < 0:
+                raise ValueError("miniexpr: error getting cbuffer sizes")
+            if block_nbytes[i] <= 0:
+                raise ValueError("miniexpr: invalid block size")
+            if first_run:
+                if i == 0:
+                    q = ndarr.blockshape[ndim - 1]
+                    p = ndarr.blockshape[ndim - 2]
+                    # nchunk_ = chunks_in_row * chunk_row + chunk_col
+                    # convert from chunk_idx to element idx chunk_i (row)
+                    chunk_i = nchunk_ // ncols * out_chunk_nrows
+                    chunk_startA = nchunkA + chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
+                    nchunkA = chunk_startA
+                    # nblock_ = blocks_in_chunkrow * block_row + block_col
+                    # convert from block_idx to element idx block_i (row)
+                    block_i = nblock_ // block_ncols * out_block_nrows
+                    block_startA = nblockA + block_i // p * Ablock_ncols
+                else: # i = 1
+                    r = ndarr.blockshape[ndim - 1]
+                    # convert from chunk_idx to element idx chunk_j (col)
+                    chunk_j = nchunk_ % ncols * out_chunk_ncols
+                    chunk_startB = nchunkB + chunk_j // ndarr.chunkshape[ndim - 1]
+                    nchunkB = chunk_startB
+                    # convert from block_idx to element idx block_j (col)
+                    block_j = nblock_ % block_ncols * out_block_ncols
+                    block_startB = nblockB + block_j // r
+                input_buffers[i] = malloc(block_nbytes[i])
+            if input_buffers[i] == NULL:
+                raise MemoryError("miniexpr: cannot allocate input block buffer")
+            blocknitems[i] = block_nbytes[i] // <int> ndarr.sc.typesize
+
+        first_run = False
+        nblockA = block_startA
+        nblockB = block_startB
+        while True: # block loop
+            startA = nblockA * blocknitems[0]
+            startB = nblockB * blocknitems[1]
+            rc = blosc2_getitem_ctx(dctx, src[0], chunk_cbytes[0], startA, blocknitems[0],
+                                    input_buffers[0], block_nbytes[0])
+            if rc < 0:
+                raise ValueError("matmul: error decompressing the A chunk")
+            rc = blosc2_getitem_ctx(dctx, src[1], chunk_cbytes[1], startB, blocknitems[1],
+                                    input_buffers[1], block_nbytes[1])
+            if rc < 0:
+                raise ValueError("matmul: error decompressing the B chunk")
+            batch = 0
+            while batch < batches:
+                batch_ = batch
+                offsetA = 0
+                offsetB = 0
+                offset = 0
+                for i in range(ndim - 2):
+                    coord = batch_ // udata.el_strides[0][i]
+                    batch_ = batch_ % udata.el_strides[0][i]
+                    offsetA += coord * udata.el_strides[1][i]
+                    offsetB += coord * udata.el_strides[2][i]
+                    offset += coord * udata.el_strides[0][i]
+                if typecode == 0:
+                    if typesize == 4:
+                        if selected_backend == B2_MATMUL_BACKEND_ACCELERATE:
+                            rc = b2_gemm_accelerate_f32(
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        elif selected_backend == B2_MATMUL_BACKEND_CBLAS:
+                            rc = b2_gemm_cblas_f32(
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        else:
+                            rc = matmul_block_kernel[float](
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                    else:
+                        if selected_backend == B2_MATMUL_BACKEND_ACCELERATE:
+                            rc = b2_gemm_accelerate_f64(
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        elif selected_backend == B2_MATMUL_BACKEND_CBLAS:
+                            rc = b2_gemm_cblas_f64(
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        else:
+                            rc = matmul_block_kernel[double](
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                elif typecode == 1:
+                    if typesize == 4:
+                        rc = matmul_block_kernel[int32_t](<int32_t*>input_buffers[0] + offsetA, <int32_t*>input_buffers[1] + offsetB, <int32_t*>params_output + offset, p, q, r)
+                    else:
+                        rc = matmul_block_kernel[int64_t](<int64_t*>input_buffers[0] + offsetA, <int64_t*>input_buffers[1] + offsetB, <int64_t*>params_output + offset, p, q, r)
+                else:
+                    with gil:
+                        raise ValueError("Unsupported dtype")
+                batch += 1
+            nblockA += 1
+            nblockB += Bblock_ncols
+            if (nblockA % Ablock_ncols == 0):
+                break
+        nchunkA += 1
+        nchunkB += Bncols
+        if (nchunkA % Ancols == 0):
+            break
+
+
+    blosc2_free_ctx(dctx)
+    # Free resources
+    for i in range(2):
+        free(input_buffers[i])
+    free(input_buffers)
+    free(src)
+
+    return 0
 
 # Aux function for prefilter and postfilter udf
 cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
@@ -2221,6 +2854,19 @@ cdef int miniexpr_prefilter(blosc2_prefilter_params *params):
     return aux_miniexpr(<me_udata *> params.user_data, params.nchunk, params.nblock, False,
                         params.output, params.output_typesize)
 
+cdef int matmul_prefilter(blosc2_prefilter_params *params):
+    cdef int typecode
+
+    cdef mm_udata* udata = <mm_udata *> params.user_data
+    cdef b2nd_array_t* out_arr = udata.array
+    cdef char dtype_kind = out_arr.dtype[1]
+    if dtype_kind == 'f':
+        typecode = 0
+    elif dtype_kind == 'i':
+        typecode = 1
+    else:
+        raise ValueError("Unsupported dtype")
+    return aux_matmul(udata, params.nchunk, params.nblock, params.output, params.output_typesize, typecode)
 
 cdef int general_udf_prefilter(blosc2_prefilter_params *params):
     cdef udf_udata *udata = <udf_udata *> params.user_data
@@ -2434,7 +3080,8 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    # For reading with the default number of threads
+    # nthreads is not stored in the frame; apply the live global when the caller
+    # did not supply an explicit cparams — symmetric with the DParams default below.
     dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
@@ -2442,6 +3089,10 @@ def open(urlpath, mode, offset, **kwargs):
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.schunk.cparams = dataclasses.replace(
+                res.schunk.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads)
+            )
         if dparams is not None:
             res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
@@ -2450,6 +3101,8 @@ def open(urlpath, mode, offset, **kwargs):
                             mode=mode, **kwargs)
         if cparams is not None:
             res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.cparams = dataclasses.replace(res.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
         if dparams is not None:
             res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
@@ -2843,6 +3496,70 @@ cdef class NDArray:
 
         return arr
 
+    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
+        if self.ndim != 1:
+            raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
+        if nchunk < 0 or nchunk >= self.array.sc.nchunks:
+            raise IndexError("chunk index out of range")
+        if start < 0 or nitems < 0:
+            raise ValueError("start and nitems must be >= 0")
+        if start + nitems > self.array.chunknitems:
+            raise ValueError("requested span exceeds chunk size")
+
+        cdef uint8_t *chunk = NULL
+        cdef c_bool needs_free
+        cdef int32_t chunk_nbytes
+        cdef int32_t chunk_cbytes
+        cdef int32_t block_nbytes
+        cdef blosc2_context *dctx = self.array.sc.dctx
+        cdef Py_buffer view
+        cdef int rc
+        cdef int32_t lazychunk_cbytes
+        cdef c_bool owns_dctx = False
+
+        lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
+        if lazychunk_cbytes < 0:
+            raise RuntimeError("Error while getting the lazy chunk")
+
+        rc = blosc2_cbuffer_sizes(chunk, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
+        if rc < 0:
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Error while getting compressed buffer sizes")
+        if start + nitems > chunk_nbytes // self.array.sc.typesize:
+            if needs_free:
+                free(chunk)
+            raise ValueError("requested span exceeds decoded chunk size")
+
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        if view.len < nitems * self.array.sc.typesize:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise ValueError("destination buffer is smaller than the requested decoded span")
+
+        if dctx == NULL:
+            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+            owns_dctx = True
+        if dctx == NULL:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Could not create decompression context")
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # blosc2_getitem_ctx() needs the full lazy chunk size returned by
+        # blosc2_schunk_get_lazychunk().
+        rc = blosc2_getitem_ctx(dctx, chunk, lazychunk_cbytes, start, nitems, view.buf, view.len)
+        if owns_dctx:
+            blosc2_free_ctx(dctx)
+        PyBuffer_Release(&view)
+        if needs_free:
+            free(chunk)
+        if rc < 0:
+            raise RuntimeError("Error while decoding the requested span")
+
+        return arr
+
     def get_oindex_numpy(self, arr, key):
         """
         Orthogonal indexing. Key is a tuple of lists of integer indices.
@@ -3068,6 +3785,49 @@ cdef class NDArray:
 
         return udata
 
+    cdef mm_udata *_fill_mm_udata(self, inputs):
+        cdef mm_udata *udata = <mm_udata *> malloc(sizeof(mm_udata))
+        cdef int cstrides, bstrides, estrides
+        cdef b2nd_array_t* inp
+        cdef b2nd_array_t** inputs_ = <b2nd_array_t**> malloc(2 * sizeof(b2nd_array_t*))
+        for i in range(2):
+            operand = inputs['x1'] if i == 0 else inputs['x2']
+            inputs_[i] = <b2nd_array_t*><uintptr_t>operand.c_array
+            inputs_[i].chunk_cache.nchunk = -1
+            inputs_[i].chunk_cache.data = NULL
+        udata.inputs = inputs_
+        udata.array = self.array
+
+        # Save these in udf_udata to avoid computing them for each block
+        for i in range(3):
+            udata.chunks_strides[i][self.array.ndim - 1] = 1
+            udata.blocks_strides[i][self.array.ndim - 1] = 1
+            udata.el_strides[i][self.array.ndim - 1] = 1
+        for idx in range(2, self.array.ndim + 1):
+            i = self.array.ndim - idx
+            udata.chunks_strides[0][i] = udata.chunks_strides[0][i + 1] * udata.array.extshape[i + 1] // udata.array.chunkshape[i + 1]
+            udata.blocks_strides[0][i] = udata.blocks_strides[0][i + 1] * udata.array.extchunkshape[i + 1] // udata.array.blockshape[i + 1]
+            udata.el_strides[0][i] = udata.el_strides[0][i + 1] * udata.array.blockshape[i + 1]
+
+        for j in range(1, 3):
+            inp = inputs_[j - 1]
+            cstrides = bstrides = estrides = 1
+            for idx in range(2, self.array.ndim + 1):
+                i = inp.ndim - idx
+                if (inp.shape[i + 1] == 1 and i < inp.ndim - 3) or i < 0:
+                    udata.chunks_strides[j][i] = 0
+                    udata.blocks_strides[j][i] = 0
+                    udata.el_strides[j][i] = 0
+                else:
+                    bstrides *= inp.extchunkshape[i + 1] // inp.blockshape[i + 1]
+                    cstrides *= inp.extshape[i + 1] // inp.chunkshape[i + 1]
+                    estrides *= inp.blockshape[i + 1]
+                    udata.chunks_strides[j][i] = cstrides
+                    udata.blocks_strides[j][i] = bstrides
+                    udata.el_strides[j][i] = estrides
+
+        return udata
+
     def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
@@ -3143,6 +3903,26 @@ cdef class NDArray:
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
         preparams.output_is_disposable = False if aux_reduc is None else True
+        cparams.preparams = preparams
+        _check_cparams(cparams)
+
+        if self.array.sc.cctx != NULL:
+            # Freeing NULL context can lead to segmentation fault
+            blosc2_free_ctx(self.array.sc.cctx)
+        self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.array.sc.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
+
+    def _set_pref_matmul(self, inputs, fp_accuracy):
+        # Set prefilter for miniexpr
+        cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> matmul_prefilter
+
+        cdef mm_udata* udata = self._fill_mm_udata(inputs)
+        cdef b2nd_array_t* out_arr = udata.array
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
+        preparams.user_data = udata
+        preparams.output_is_disposable = False
         cparams.preparams = preparams
         _check_cparams(cparams)
 
@@ -3544,3 +4324,31 @@ def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
     new_base = arr1 if arr1.base is None else arr1.base
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                         _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)
+
+
+def set_matmul_block_backend(mode):
+    if mode == "auto":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_AUTO)
+    elif mode == "naive":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_NAIVE)
+    elif mode == "accelerate":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_ACCELERATE)
+    elif mode == "cblas":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_CBLAS)
+    else:
+        raise ValueError("mode must be 'auto', 'naive', 'accelerate', or 'cblas'")
+
+
+def get_matmul_block_backend():
+    return b2_get_matmul_backend_name().decode("utf-8")
+
+
+def get_selected_matmul_block_backend():
+    return b2_get_selected_matmul_backend_name().decode("utf-8")
+
+
+def get_loaded_matmul_cblas_library():
+    cdef const char *path = b2_get_loaded_cblas_path()
+    if path == NULL:
+        return None
+    return path.decode("utf-8")

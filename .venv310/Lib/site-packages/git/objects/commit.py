@@ -450,14 +450,7 @@ class Commit(base.Object, TraversableIterableObj, Diffable, Serializable):
         :return:
             List containing key-value tuples of whitespace stripped trailer information.
         """
-        cmd = ["git", "interpret-trailers", "--parse"]
-        proc: Git.AutoInterrupt = self.repo.git.execute(  # type: ignore[call-overload]
-            cmd,
-            as_process=True,
-            istream=PIPE,
-        )
-        trailer: str = proc.communicate(str(self.message).encode())[0].decode("utf8")
-        trailer = trailer.strip()
+        trailer = self._interpret_trailers(self.repo, self.message, ["--parse"], encoding=self.encoding).strip()
 
         if not trailer:
             return []
@@ -468,6 +461,27 @@ class Commit(base.Object, TraversableIterableObj, Diffable, Serializable):
             trailer_list.append((key.strip(), val.strip()))
 
         return trailer_list
+
+    @classmethod
+    def _interpret_trailers(
+        cls,
+        repo: "Repo",
+        message: Union[str, bytes],
+        trailer_args: Sequence[str],
+        encoding: str = default_encoding,
+    ) -> str:
+        message_bytes = message if isinstance(message, bytes) else message.encode(encoding, errors="strict")
+        cmd = [repo.git.GIT_PYTHON_GIT_EXECUTABLE, "interpret-trailers", *trailer_args]
+        proc: Git.AutoInterrupt = repo.git.execute(  # type: ignore[call-overload]
+            cmd,
+            as_process=True,
+            istream=PIPE,
+        )
+        try:
+            stdout_bytes, _ = proc.communicate(message_bytes)
+            return stdout_bytes.decode(encoding, errors="strict")
+        finally:
+            finalize_process(proc)
 
     @property
     def trailers_dict(self) -> Dict[str, List[str]]:
@@ -570,6 +584,7 @@ class Commit(base.Object, TraversableIterableObj, Diffable, Serializable):
         committer: Union[None, Actor] = None,
         author_date: Union[None, str, datetime.datetime] = None,
         commit_date: Union[None, str, datetime.datetime] = None,
+        trailers: Union[None, Dict[str, str], List[Tuple[str, str]]] = None,
     ) -> "Commit":
         """Commit the given tree, creating a :class:`Commit` object.
 
@@ -608,6 +623,14 @@ class Commit(base.Object, TraversableIterableObj, Diffable, Serializable):
 
         :param commit_date:
             The timestamp for the committer field.
+
+        :param trailers:
+            Optional trailer key-value pairs to append to the commit message.
+            Can be a dictionary mapping trailer keys to values, or a list of
+            ``(key, value)`` tuples (useful when the same key appears multiple
+            times, e.g. multiple ``Signed-off-by`` trailers). Trailers are
+            appended using ``git interpret-trailers``.
+            See :manpage:`git-interpret-trailers(1)`.
 
         :return:
             :class:`Commit` object representing the new commit.
@@ -677,6 +700,21 @@ class Commit(base.Object, TraversableIterableObj, Diffable, Serializable):
         if isinstance(tree, str):
             tree = repo.tree(tree)
         # END tree conversion
+
+        # APPLY TRAILERS
+        if trailers:
+            trailer_args: List[str] = []
+            if isinstance(trailers, dict):
+                for key, val in trailers.items():
+                    trailer_args.append("--trailer")
+                    trailer_args.append(f"{key}: {val}")
+            else:
+                for key, val in trailers:
+                    trailer_args.append("--trailer")
+                    trailer_args.append(f"{key}: {val}")
+
+            message = cls._interpret_trailers(repo, str(message), trailer_args)
+        # END apply trailers
 
         # CREATE NEW COMMIT
         new_commit = cls(

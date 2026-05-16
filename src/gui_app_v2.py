@@ -8,12 +8,12 @@ import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
+from multiprocessing import Process
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Optional
 
 from .config import load_config
 from .patient_profiles import PatientProfile, create_profile, list_profiles
-from multiprocessing import Process
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,19 @@ class GuiSelection:
     offline_file: Optional[str] = None
     patient_profile_id: Optional[str] = None
     patient_profile_name: Optional[str] = None
+
+
+def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
+    """Launch the recording paradigm inside a spawned process."""
+    from .lsl_acquisition import create_streams
+    from .stimuli.paradigm_base import MotorImageryParadigm
+
+    cfg = load_config()
+    if pname:
+        print(f"Patient: {pname} (id={pid})")
+    streams = create_streams(cfg)
+    paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
+    paradigm.run()
 
 
 class _QueueWriter:
@@ -761,18 +774,6 @@ def _run_selection(selection: GuiSelection) -> None:
     if selection.mode == "record":
         # PsychoPy/pyglet must run in the main thread of a process. Spawn a separate
         # process for the paradigm so its event loop runs in that process's main thread.
-        def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
-            from .lsl_acquisition import create_streams
-            from .stimuli.paradigm_base import MotorImageryParadigm
-            from .config import load_config
-
-            cfg = load_config()
-            if pname:
-                print(f"Patient: {pname} (id={pid})")
-            streams = create_streams(cfg)
-            paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
-            paradigm.run()
-
         proc = Process(target=_start_paradigm_proc, args=(selection.patient_profile_id, selection.patient_profile_name))
         proc.start()
         proc.join()

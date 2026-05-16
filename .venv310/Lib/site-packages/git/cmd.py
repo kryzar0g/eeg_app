@@ -368,8 +368,12 @@ class _AutoInterrupt:
             status = proc.wait()  # Ensure the process goes away.
 
             self.status = self._status_code_if_terminate or status
-        except OSError as ex:
-            _logger.info("Ignored error after process had died: %r", ex)
+        except (OSError, AttributeError) as ex:
+            # On interpreter shutdown (notably on Windows), parts of the stdlib used by
+            # subprocess can already be torn down (e.g. `subprocess._winapi` becomes None),
+            # which can cause AttributeError during terminate(). In that case, we prefer
+            # to silently ignore to avoid noisy "Exception ignored in: __del__" messages.
+            _logger.info("Ignored error while terminating process: %r", ex)
         # END exception handling
 
     def __del__(self) -> None:
@@ -941,21 +945,33 @@ class Git(metaclass=_GitMeta):
             )
 
     @classmethod
+    def _canonicalize_option_name(cls, option: str) -> str:
+        """Return the option name used for unsafe-option checks.
+
+        Examples:
+            ``"--upload-pack=/tmp/helper"`` -> ``"upload-pack"``
+            ``"upload_pack"`` -> ``"upload-pack"``
+            ``"--config core.filemode=false"`` -> ``"config"``
+        """
+        option_name = option.lstrip("-").split("=", 1)[0]
+        option_tokens = option_name.split(None, 1)
+        if not option_tokens:
+            return ""
+        return dashify(option_tokens[0])
+
+    @classmethod
     def check_unsafe_options(cls, options: List[str], unsafe_options: List[str]) -> None:
         """Check for unsafe options.
 
         Some options that are passed to ``git <command>`` can be used to execute
         arbitrary commands. These are blocked by default.
         """
-        # Options can be of the form `foo`, `--foo bar`, or `--foo=bar`, so we need to
-        # check if they start with "--foo" or if they are equal to "foo".
-        bare_unsafe_options = [option.lstrip("-") for option in unsafe_options]
+        # Options can be of the form `foo`, `--foo`, `--foo bar`, or `--foo=bar`.
+        canonical_unsafe_options = {cls._canonicalize_option_name(option): option for option in unsafe_options}
         for option in options:
-            for unsafe_option, bare_option in zip(unsafe_options, bare_unsafe_options):
-                if option.startswith(unsafe_option) or option == bare_option:
-                    raise UnsafeOptionError(
-                        f"{unsafe_option} is not allowed, use `allow_unsafe_options=True` to allow it."
-                    )
+            unsafe_option = canonical_unsafe_options.get(cls._canonicalize_option_name(option))
+            if unsafe_option is not None:
+                raise UnsafeOptionError(f"{unsafe_option} is not allowed, use `allow_unsafe_options=True` to allow it.")
 
     AutoInterrupt: TypeAlias = _AutoInterrupt
 
@@ -1360,25 +1376,29 @@ class Git(metaclass=_GitMeta):
             if output_stream is None:
                 stdout_value, stderr_value = communicate()
                 # Strip trailing "\n".
-                if stdout_value.endswith(newline) and strip_newline_in_stdout:  # type: ignore[arg-type]
+                if stdout_value is not None and stdout_value.endswith(newline) and strip_newline_in_stdout:  # type: ignore[arg-type]
                     stdout_value = stdout_value[:-1]
-                if stderr_value.endswith(newline):  # type: ignore[arg-type]
+                if stderr_value is not None and stderr_value.endswith(newline):  # type: ignore[arg-type]
                     stderr_value = stderr_value[:-1]
 
                 status = proc.returncode
             else:
                 max_chunk_size = max_chunk_size if max_chunk_size and max_chunk_size > 0 else io.DEFAULT_BUFFER_SIZE
-                stream_copy(proc.stdout, output_stream, max_chunk_size)
-                stdout_value = proc.stdout.read()
-                stderr_value = proc.stderr.read()
+                if proc.stdout is not None:
+                    stream_copy(proc.stdout, output_stream, max_chunk_size)
+                    stdout_value = proc.stdout.read()
+                if proc.stderr is not None:
+                    stderr_value = proc.stderr.read()
                 # Strip trailing "\n".
-                if stderr_value.endswith(newline):  # type: ignore[arg-type]
+                if stderr_value is not None and stderr_value.endswith(newline):  # type: ignore[arg-type]
                     stderr_value = stderr_value[:-1]
                 status = proc.wait()
             # END stdout handling
         finally:
-            proc.stdout.close()
-            proc.stderr.close()
+            if proc.stdout is not None:
+                proc.stdout.close()
+            if proc.stderr is not None:
+                proc.stderr.close()
 
         if self.GIT_PYTHON_TRACE == "full":
             cmdstr = " ".join(redacted_command)
@@ -1568,7 +1588,7 @@ class Git(metaclass=_GitMeta):
 
         turns into::
 
-            git rev-list max-count 10 --header master
+            git rev-list --max-count=10 --header=master
 
         :return:
             Same as :meth:`execute`. If no args are given, used :meth:`execute`'s

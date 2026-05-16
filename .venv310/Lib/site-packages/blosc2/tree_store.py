@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+from __future__ import annotations
+
 import contextlib
 import os
 from collections.abc import Iterator, MutableMapping
@@ -14,11 +16,11 @@ import numpy as np
 
 import blosc2
 from blosc2.dict_store import DictStore
-from blosc2.schunk import SChunk
 
 if TYPE_CHECKING:
     from blosc2.c2array import C2Array
     from blosc2.ndarray import NDArray
+    from blosc2.schunk import SChunk
 
 
 class vlmetaProxy(MutableMapping):
@@ -29,7 +31,7 @@ class vlmetaProxy(MutableMapping):
     - Delegates iteration and length to the underlying vlmeta object.
     """
 
-    def __init__(self, tstore: "TreeStore", inner_vlmeta):
+    def __init__(self, tstore: TreeStore, inner_vlmeta):
         self._tstore = tstore
         self._inner = inner_vlmeta
 
@@ -95,15 +97,17 @@ class TreeStore(DictStore):
     Parameters
     ----------
     localpath : str
-        Local path for the directory (`.b2d`) or file (`.b2z`); other extensions
-        are not supported. If a directory is specified, it will be treated as
-        a Blosc2 directory format (B2DIR). If a file is specified, it
-        will be treated as a Blosc2 zip format (B2ZIP).
+        Local path for the directory-backed store or compact zip-backed file.
+        A ``.b2z`` suffix selects the zip-backed format. Existing directories,
+        and new paths not ending in ``.b2z``, use Blosc2 directory format
+        (B2DIR); a ``.b2d`` suffix is recommended for these directory-backed
+        stores. Existing files are treated as Blosc2 zip format (B2ZIP).
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
         Temporary directory to use when working with `.b2z` files. If None,
-        a system temporary directory will be managed. Default is None.
+        a temporary directory is created in the same directory as the `.b2z`
+        file, so that unpacked data stays on the same filesystem. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.
@@ -152,8 +156,12 @@ class TreeStore(DictStore):
         It supports the same arguments as :class:`blosc2.DictStore`.
         """
         if _from_parent_store is not None:
-            # This is a subtree view, copy state from parent
+            # This is a subtree view, copy state from parent.
+            # Mark it as closed so DictStore.__del__ does not attempt to pack
+            # or clean up the shared backing store when this ephemeral view
+            # is garbage-collected.
             self.__dict__.update(_from_parent_store.__dict__)
+            self._closed = True
         else:
             # Call initialization and mark this storage as a b2tree object
             super().__init__(*args, **kwargs, _storage_meta={"b2tree": {"version": 1}})
@@ -224,7 +232,9 @@ class TreeStore(DictStore):
 
         return key
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
+    def __setitem__(
+        self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
+    ) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
@@ -266,7 +276,9 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
 
-    def __getitem__(self, key: str) -> "NDArray | C2Array | SChunk | TreeStore":
+    def __getitem__(
+        self, key: str
+    ) -> NDArray | C2Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | TreeStore:
         """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
@@ -280,7 +292,7 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or TreeStore
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.ObjectArray or blosc2.BatchArray or TreeStore
             The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 
@@ -416,7 +428,7 @@ class TreeStore(DictStore):
         """Iterate over keys, excluding vlmeta keys."""
         return iter(self.keys())
 
-    def items(self) -> Iterator[tuple[str, "NDArray | C2Array | SChunk | TreeStore"]]:
+    def items(self) -> Iterator[tuple[str, NDArray | C2Array | SChunk | TreeStore]]:
         """Return key-value pairs in the current subtree view."""
         for key in self.keys():
             yield key, self[key]
@@ -575,7 +587,7 @@ class TreeStore(DictStore):
             # Yield current level after children (post-order)
             yield path, children_dirs, leaf_nodes
 
-    def get_subtree(self, path: str) -> "TreeStore":
+    def get_subtree(self, path: str) -> TreeStore:
         """Create a subtree view with the specified path as root.
 
         Parameters
@@ -662,8 +674,15 @@ class TreeStore(DictStore):
         """
         if hasattr(self, "_vlmeta_key"):
             vlmeta_key = self._vlmeta_key
-            # Only embedded case is expected; handle it safely.
-            if hasattr(self, "_estore") and vlmeta_key in self._estore:
+            if vlmeta_key in self.map_tree:
+                filepath = self.map_tree[vlmeta_key]
+                dest_path = os.path.join(self.working_dir, filepath)
+                parent_dir = os.path.dirname(dest_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir, exist_ok=True)
+                with open(dest_path, "wb") as f:
+                    f.write(self._vlmeta.to_cframe())
+            elif hasattr(self, "_estore") and vlmeta_key in self._estore:
                 # Replace the stored snapshot
                 with contextlib.suppress(KeyError):
                     del self._estore[vlmeta_key]
