@@ -1,12 +1,6 @@
 # eeg_app
 
-**Universální BCI aplikace s motorickou imaginací (MI)** - pracuje s libovolným počtem elektrod (8, 64, 128+) a libovolným počtem tříd (2, 4, 6, N).
-
-Aplikace komunikuje s EEG zařízením přes **Lab Streaming Layer (LSL)** v reálném čase.
-
-## 🚀 Rychlý start (1 minuta)
-
-### Instalace (první spuštění)
+### Instalace
 ```powershell
 # 1. Otevřete PowerShell v adresáři projektu
 cd C:\Users\kryst\OneDrive\Documents\skola\eeg_app
@@ -26,7 +20,7 @@ pip install -r requirements.txt
 python run_app.py
 ```
 
-### Co se stane po spuštění
+### po spuštění
 1. Otevře se **grafické menu** (GUI)
 2. V levém panelu vidíte 4 možnosti:
    - **Overview** - zobrazení aktuální konfigurace
@@ -36,14 +30,6 @@ python run_app.py
 
 ---
 
-## Cíle aplikace
-
-- ✅ Připojení k EEG zařízení přes LSL v reálném čase
-- ✅ Zobrazování vizuálních podnětů (dynamicky pozicované pro N tříd)
-- ✅ Segmentace dat a extrakce příznaků
-- ✅ Trénink klasifikátoru (LDA/SVM) a online rozpoznávání
-- ✅ Podpora libovolného počtu elektrod a experimentálních tříd
-
 ## Pracovní postup
 
 ### Normální workflow (doporučeno)
@@ -52,7 +38,7 @@ python run_app.py
                  Záznam: LabRecorder zachytí EEG + markery
    
 2. Train Model → Vyberte nahraný EEG soubor (.edf/.bdf)
-                 Systém: extrahuje příznaky → trénuje LDA/SVM
+                 Systém: extrahuje příznaky → trénuje model
                  Výstup: model → models/model_latest.joblib
    
 3. Online BCI  → Připojte živý EEG stream (LSL)
@@ -67,8 +53,8 @@ Aplikace obsahuje šablony pro různé nastavení:
 | Soubor | Popis | Třídy | Kanály |
 |--------|-------|-------|--------|
 | `config.yaml` | Výchozí 4-třídní | UP, DOWN, LEFT, RIGHT | Auto |
-| `config_2class.yaml` | 2-třídní jednoduché | LEFT, RIGHT | Auto |
-| `config_6class.yaml` | 6-třídní pokročilé | 6 končetin | Auto |
+| `config_2class.yaml` | 2-třídní  | LEFT, RIGHT | Auto |
+| `config_6class.yaml` | 6-třídní  | 6 končetin | Auto |
 | `config_8ch.yaml` | Přenosné zařízení | 4 třídy | 8 elektrod |
 | `config_64ch.yaml` | Laboratorní system | 4 třídy | 64 elektrod |
 
@@ -102,7 +88,7 @@ eeg_app/
 │   ├── lsl_acquisition.py ← Připojení k EEG
 │   ├── preprocessing.py   ← Filtrování
 │   ├── features.py        ← Extrakce příznaků
-│   ├── classifier.py      ← LDA/SVM modely
+│   ├── classifier.py      ← modely
 │   ├── logging_config.py  ← Logování
 │   └── stimuli/
 │       └── paradigm_base.py ← N-třídní MI paradigma
@@ -119,9 +105,7 @@ eeg_app/
 └── ARCHITECTURE.md        ← Technická architektura
 ```
 
-## Instalace prostředí (pokud neexistuje)
-
-Pokud jste nikdy nespuštěli aplikaci:
+## Instalace prostředí
 
 ```powershell
 # Ověřte že máte Conda
@@ -162,10 +146,9 @@ python run_app.py
 
 ## Další dokumentace
 
-- 📖 **README_ENHANCED.md** - Úplný uživatelský průvodce
-- ⚙️ **CONFIG_GUIDE.md** - Detailní konfigurace
-- 🏗️ **ARCHITECTURE.md** - Technický design a API
+- **README_ENHANCED.md** - Úplný uživatelský průvodce
+- **CONFIG_GUIDE.md** - Detailní konfigurace
+- **ARCHITECTURE.md** - Technický design a API
 
 ---
 
-**Potřebujete nápovědu?** Podívejte se do `logs/eeg_app.log` pro detaily jakéhokoli chybu.
