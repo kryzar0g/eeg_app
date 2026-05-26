@@ -6,12 +6,28 @@ from typing import Tuple
 
 import joblib
 import numpy as np
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+try:
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.svm import SVC
+except Exception as e:  # pragma: no cover - environment-dependent
+    # Provide a clearer, actionable error when binary dependencies fail to load
+    msg = (
+        "Nepodařilo se importovat scikit-learn nebo některou z jeho nativních závislostí\n"
+        f"Původní chyba: {e}\n\n"
+        "Možné opravy (Windows):\n"
+        "1) Aktivujte své virtuální prostředí (pokud používáte) nebo otevřete PowerShell s Pythonem.\n"
+        "2) Aktualizujte pip a nainstalujte/aktualizujte potřebné balíčky:\n"
+        "   python -m pip install --upgrade pip\n"
+        "   python -m pip install --upgrade numpy scipy scikit-learn pyarrow\n"
+        "3) Pokud chyba přetrvává, nainstalujte Microsoft Visual C++ Redistributable (2015-2022),\n"
+        "   restartujte systém a znovu spusťte aplikaci. Stažení: https://learn.microsoft.com/windows/win32/msi/download-the-latest-supported-visual-c-downloads\n\n"
+        "Pokud chcete, mohu zkontrolovat verze nainstalovaných balíčků ve vašem prostředí nebo připravit přesné příkazy."
+    )
+    raise ImportError(msg) from e
 
 from .config import AppConfig, PROJECT_ROOT
 from .features import BandpowerFeatureExtractor, EpochSignalPreprocessor, FilterBankCSP
