@@ -1,0 +1,59 @@
+experiment:
+  subject_id: "S001_24ch"
+  session_id: "session_24ch"
+  trials_per_class: 36
+  baseline_duration: 1.5
+  cue_duration: 0.8
+  imagery_duration: 3.0
+  iti_duration: 1.5
+
+lsl:
+  eeg_stream_name: "EEG"
+  eeg_stream_type: "EEG"
+  marker_stream_name: "Markers"
+
+paradigm:
+  classes:
+    UP: 1
+    DOWN: 2
+    LEFT: 3
+    RIGHT: 4
+
+preprocessing:
+  sfreq: 250.0
+  l_freq: 8.0
+  h_freq: 30.0
+  notch_freq: 50.0
+  car: true
+
+# Feature extraction settings
+features:
+  method: "fbcsp"
+  bands:
+    - [8.0, 12.0]
+    - [12.0, 30.0]
+  csp_components: 4
+  fbcsp_top_k: 12
+
+training:
+  window_length_sec: 2.0
+  crop_enabled: true
+  crop_step_sec: 0.5
+
+classifier:
+  algorithm: "lda"
+  test_size: 0.2
+
+events:
+  mode: "csv"
+  stim_channel: "STI 014"
+  tmin: 0.0
+  tmax: 4.0
+  timestamp_csv_path: "data/timestamps.csv"
+  epoch_length: 4.0
+
+# EEG-specific metadata (optional): number of channels and placeholder names
+eeg:
+  n_channels: 24
+  # Replace these placeholder names with your actual channel labels/order
+  ch_names: ["E1","E2","E3","E4","E5","E6","E7","E8","E9","E10","E11","E12","E13","E14","E15","E16","E17","E18","E19","E20","E21","E22","E23","E24"]
