@@ -1,11 +1,13 @@
 experiment:
   subject_id: "S001_24ch"
   session_id: "session_24ch"
-  trials_per_class: 36
+  trials_per_class: 40   # 40 trialů → 8 bloků po 5 průměrování
   baseline_duration: 1.5
   cue_duration: 0.8
   imagery_duration: 3.0
   iti_duration: 1.5
+  # ERP averaging: každý stimul se zobrazí 5× za sebou, poté průměrování
+  n_averages: 5
 
 lsl:
   eeg_stream_name: "EEG"

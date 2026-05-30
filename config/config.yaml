@@ -8,6 +8,8 @@ experiment:
   cue_duration: 0.8
   imagery_duration: 3.0
   iti_duration: 1.5
+  # ERP averaging: 1 = bez průměrování, >1 = průměrovat N opakování za sebou
+  n_averages: 1
 
 lsl:
   eeg_stream_name: "EEG"
