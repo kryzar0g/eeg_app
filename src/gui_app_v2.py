@@ -18,6 +18,14 @@ from .patient_profiles import PatientProfile, create_profile, list_profiles
 logger = logging.getLogger(__name__)
 
 
+def _has_psychopy() -> bool:
+    try:
+        import psychopy  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 @dataclass
 class GuiSelection:
     """User's mode and configuration selection."""
@@ -29,15 +37,20 @@ class GuiSelection:
 
 def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
     """Launch the recording paradigm inside a spawned process."""
-    from .lsl_acquisition import create_streams
-    from .stimuli.paradigm_base import MotorImageryParadigm
+    try:
+        from .lsl_acquisition import create_streams
+        from .stimuli.paradigm_base import MotorImageryParadigm
 
-    cfg = load_config()
-    if pname:
-        print(f"Patient: {pname} (id={pid})")
-    streams = create_streams(cfg)
-    paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
-    paradigm.run()
+        cfg = load_config()
+        if pname:
+            print(f"Patient: {pname} (id={pid})")
+        streams = create_streams(cfg)
+        paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
+        paradigm.run()
+    except Exception as e:
+        # Ensure process exits cleanly and surface a readable message in the GUI log
+        print(f"Paradigm process failed: {type(e).__name__}: {e}")
+        return
 
 
 class _QueueWriter:
@@ -646,6 +659,16 @@ Paradigm:
             self._prompt_for_patient_profile()
         if self._patient_profile is None:
             messagebox.showerror("Patient required", "Please select or create a patient profile before recording.")
+            return
+        if not _has_psychopy():
+            messagebox.showerror(
+                "Psychopy missing",
+                "Record mode requires psychopy, which is not installed in the current environment.\n\n"
+                "Install it in .venv310 with:\n"
+                "  .\\.venv310\\Scripts\\Activate.ps1\n"
+                "  python -m pip install psychopy\n\n"
+                "Then start the app again.",
+            )
             return
         if not self._record_instructions():
             return

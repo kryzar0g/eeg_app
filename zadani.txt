@@ -20,3 +20,9 @@ Cílem projektu je vyvinout softwarové řešení pro rozpoznávání motorické
 Doporučená literatura
 ●   	Niedermeyer E., Lopes da Silva F. Electroencephalography: Basic Principles, Clinical Applications and Related Fields. Philadelphia: Lippincott Williams & Wilkins.
 ●   	Kothe, C., Shirazi, S. Y., Stenner, T., Medine, D., Boulay, C., Grivich, M. I., Artoni, F., Mullen, T., Delorme, A., & Makeig, S. (2025). The Lab Streaming Layer for Synchronized Multimodal Recording. Imaging Neuroscience, 3, IMAG.a.136. https://doi.org/10.1162/IMAG.a.136
+
+bud komunikace a predani signalu EEg pres lsl po siti 
+nebo upravit tak ze aplikace bude prijimat primo data z eeg zarizeni bude zpracovavat vsechno sama , nebude potreba nic jinho 
+opravit nefungujici zobrazeni mereni , psychopy
+merit stimul x krat za sebou a pak to vyprumerovat aby se zvysila jeho sila a byl vic videt
+24 kanalu eeg , vytvorit exe soubor 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import warnings
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
@@ -1742,12 +1741,9 @@ def _open_treestore_root_object(store, urlpath, mode):
     if manifest["kind"] == "ctable":
         if mode not in {"r", "a"}:
             return store
-        # Discard the probe store without repacking — it was only opened
-        # to peek at the manifest.  A full close() would trigger to_b2z()
-        # even though nothing was modified, and CTable.open() below will
-        # create its own store anyway.
-        store.discard()
-        return blosc2.CTable.open(urlpath, mode=mode)
+        # Reuse the TreeStore that was opened to inspect the root manifest.
+        # This avoids a second TreeStore open when dispatching root CTables.
+        return blosc2.CTable._open_from_existing_filestore(urlpath, mode=mode, store=store)
 
     return store
 
@@ -1760,12 +1756,9 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
-_OPEN_MODE_SENTINEL = object()
-
-
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
-    mode: str = _OPEN_MODE_SENTINEL,
+    mode: str = "r",
     offset: int = 0,
     **kwargs: dict,
 ) -> (
@@ -1793,10 +1786,8 @@ def open(
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
-        'w' means create (overwrite if it exists). Defaults to 'a' for now,
-        but will change to 'r' in a future release. Pass ``mode='a'``
-        explicitly to preserve writable behavior, or ``mode='r'`` for
-        read-only access.
+        'w' means create (overwrite if it exists). Defaults to 'r' (
+        read-only).
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1877,19 +1868,6 @@ def open(
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
-    # Resolve the sentinel before URLPath check so we can raise the correct
-    # error without also triggering the deprecation warning for invalid calls.
-    if mode is _OPEN_MODE_SENTINEL:
-        # TODO: remove the sentinel/FutureWarning path once blosc2.open() defaults to mode="r".
-        warnings.warn(
-            "blosc2.open() currently defaults to mode='a', but this will change "
-            "to mode='r' in a future release. Pass mode='a' explicitly to keep "
-            "writable behavior, or mode='r' for read-only access.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        mode = "a"
-
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
             raise NotImplementedError(
