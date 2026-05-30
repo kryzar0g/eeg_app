@@ -19,6 +19,15 @@ class ExperimentConfig(BaseModel):
     cue_duration: float = Field(1.0, gt=0)
     imagery_duration: float = Field(4.0, gt=0)
     iti_duration: float = Field(2.0, gt=0)
+    n_averages: int = Field(
+        1,
+        ge=1,
+        description=(
+            "Počet opakování každého stimulu za sebou. "
+            "Při trénování se průměruje n_averages po sobě jdoucích epoch stejné třídy "
+            "→ zvýšení SNR signálu (ERP averaging)."
+        ),
+    )
 
 
 class LSLConfig(BaseModel):

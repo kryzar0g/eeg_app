@@ -12,7 +12,7 @@ from .config import AppConfig, load_config
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FORMATS = {".edf", ".bdf"}
+SUPPORTED_FORMATS = {".edf", ".bdf", ".fif"}  # .fif = interní recorder výstup
 MAX_FILE_SIZE_GB = 2
 
 
@@ -32,8 +32,10 @@ def _load_raw(file_path: Path) -> mne.io.BaseRaw:
   try:
     if suffix == ".edf":
       raw = mne.io.read_raw_edf(file_path, preload=preload, verbose="ERROR")
-    else:
+    elif suffix == ".bdf":
       raw = mne.io.read_raw_bdf(file_path, preload=preload, verbose="ERROR")
+    else:  # .fif – výstup interního EegRecorderu
+      raw = mne.io.read_raw_fif(file_path, preload=True, verbose="ERROR")
 
     logger.info(
       f"Loaded {file_path.name}: {raw.n_channels} channels, {raw.n_times} samples @ {raw.info['sfreq']} Hz"
@@ -175,11 +177,110 @@ def _prepare_epochs_from_stim(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epo
   return epochs
 
 
+def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
+  """Epochy z MNE anotací – výstup interního EegRecorderu (FIF soubory).
+
+  Anotace mají popis = kód třídy jako řetězec ("1", "2", …),
+  duration = imagery_duration. Epochy začínají na onset markeru.
+  """
+  events_cfg = config.events
+  tmin = float(events_cfg.get("tmin", 0.0))
+  # tmax: explicitní z config, nebo imagery_duration jako záloha
+  tmax_cfg = events_cfg.get("tmax", None)
+  tmax = float(tmax_cfg) if tmax_cfg is not None else float(config.experiment.imagery_duration)
+
+  events, event_id = mne.events_from_annotations(raw, verbose="ERROR")
+  if events.size == 0:
+    raise RuntimeError(
+      "FIF soubor neobsahuje žádné anotace/markery. "
+      "Zkontrolujte, zda byl záznam pořízený interním EegRecorderem, "
+      "nebo přepněte na mode: stim / csv v config.yaml."
+    )
+
+  logger.info(f"Anotace nalezeny: {event_id}")
+
+  epochs = mne.Epochs(
+    raw,
+    events,
+    event_id=event_id,
+    tmin=tmin,
+    tmax=tmax,
+    baseline=None,
+    preload=True,
+    picks="eeg",
+    verbose="ERROR",
+  )
+  logger.info(f"Vytvořeno {len(epochs)} epoch z anotací")
+  return epochs
+
+
 def _prepare_epochs(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
   mode = str(config.events.get("mode", "stim")).lower()
+
+  # FIF soubory z interního EegRecorderu mají anotace → vždy použít annotations mode
+  filenames = getattr(raw, "filenames", [])
+  is_fif = bool(filenames) and any(str(f).lower().endswith(".fif") for f in filenames)
+  if is_fif and hasattr(raw, "annotations") and len(raw.annotations) > 0:
+    logger.info(
+      "FIF soubor s MNE anotacemi – automaticky přepínám na mode 'annotations'"
+    )
+    return _prepare_epochs_from_annotations(raw, config)
+
+  if mode == "annotations":
+    return _prepare_epochs_from_annotations(raw, config)
   if mode == "csv":
     return _prepare_epochs_from_csv(raw, config)
   return _prepare_epochs_from_stim(raw, config)
+
+
+def _average_epochs(
+  X: np.ndarray,
+  y: np.ndarray,
+  n_averages: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+  """Průměruje skupiny n_averages epoch stejné třídy (ERP averaging).
+
+  Pro každou třídu rozdělí dostupné epochy do skupin po n_averages
+  a každou skupinu zprůměruje. Výsledkem je méně epoch s vyšším SNR.
+
+  Příklad: 40 epoch × 4 třídy, n_averages=5 → 8 průměrovaných epoch × 4 třídy.
+  """
+  if n_averages <= 1:
+    return X, y
+
+  unique_labels = np.unique(y)
+  X_out: List[np.ndarray] = []
+  y_out: List[int] = []
+
+  for label in unique_labels:
+    idx = np.where(y == label)[0]
+    n_groups = len(idx) // n_averages
+    if n_groups == 0:
+      logger.warning(
+        f"Třída {label}: pouze {len(idx)} epoch, "
+        f"n_averages={n_averages} – přeskakuji průměrování pro tuto třídu"
+      )
+      X_out.append(X[idx])
+      y_out.extend([int(label)] * len(idx))
+      continue
+
+    for i in range(n_groups):
+      group_idx = idx[i * n_averages : (i + 1) * n_averages]
+      averaged = X[group_idx].mean(axis=0)  # (n_channels, n_times)
+      X_out.append(averaged[np.newaxis])
+      y_out.append(int(label))
+
+    remainder = len(idx) % n_averages
+    if remainder:
+      logger.debug(
+        f"Třída {label}: {remainder} zbývajících epoch vynecháno při průměrování"
+      )
+
+  logger.info(
+    f"ERP averaging: {len(y)} epoch → {len(y_out)} průměrovaných epoch "
+    f"(n_averages={n_averages})"
+  )
+  return np.vstack(X_out), np.array(y_out, dtype=int)
 
 
 def _crop_epoch_array(
@@ -253,6 +354,11 @@ def run_offline_from_file(file_path_str: str) -> Tuple[float, int]:
     step_samples=step_samples,
     augment=bool(config.training.crop_enabled),
   )
+
+  # ERP averaging: průměrovat skupiny epoch pro zvýšení SNR
+  n_averages = int(getattr(config.experiment, "n_averages", 1))
+  if n_averages > 1:
+    X, y = _average_epochs(X, y, n_averages=n_averages)
 
   logger.info(f"Epoch array shape: {X.shape}, classes: {len(np.unique(y))}")
   logger.info("Training classifier pipeline...")

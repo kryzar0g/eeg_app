@@ -143,20 +143,44 @@ class MotorImageryParadigm(Paradigm):
         return stimuli
     
     def _build_trials(self) -> List[Dict]:
-        """Build randomized trial list."""
+        """Build randomized trial list.
+
+        Pokud je n_averages > 1, každý stimul je zařazen n_averages-krát za sebou
+        v jednom bloku (averaging block), pak následuje ITI do dalšího bloku.
+        Při trénování se tyto opakování průměrují → vyšší SNR.
+        """
         import random
-        
+
         exp_cfg = self.config.experiment
         n_per_class = exp_cfg.trials_per_class
-        
+        n_averages = int(getattr(exp_cfg, "n_averages", 1))
+
         trials = []
-        for label, code in self.class_map.items():
-            for _ in range(n_per_class):
-                trials.append({"label": str(label), "code": int(code)})
-        
-        random.shuffle(trials)
-        logger.info(f"Built {len(trials)} trials ({n_per_class} per class)")
-        return trials
+        if n_averages > 1:
+            # Averaging mode: skupiny opakování se drží pohromadě
+            for label, code in self.class_map.items():
+                n_blocks = max(1, n_per_class // n_averages)
+                for _ in range(n_blocks):
+                    block = [
+                        {"label": str(label), "code": int(code), "rep": r, "n_reps": n_averages}
+                        for r in range(n_averages)
+                    ]
+                    trials.append(block)  # blok opakování pro jeden stimul
+            random.shuffle(trials)
+            # Rozvinout bloky do plochého seznamu
+            flat = [trial for block in trials for trial in block]
+            logger.info(
+                f"Built {len(flat)} trials ({n_per_class // n_averages} blocks × "
+                f"{n_averages} reps per class, n_averages={n_averages})"
+            )
+            return flat
+        else:
+            for label, code in self.class_map.items():
+                for _ in range(n_per_class):
+                    trials.append({"label": str(label), "code": int(code), "rep": 0, "n_reps": 1})
+            random.shuffle(trials)
+            logger.info(f"Built {len(trials)} trials ({n_per_class} per class)")
+            return trials
     
     def _draw_all_stimuli(self) -> None:
         """Draw all stimuli."""

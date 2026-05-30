@@ -36,21 +36,21 @@ class GuiSelection:
 
 
 def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
-    """Launch the recording paradigm inside a spawned process."""
-    try:
-        from .lsl_acquisition import create_streams
-        from .stimuli.paradigm_base import MotorImageryParadigm
+    """Launch the recording paradigm inside a spawned process.
 
-        cfg = load_config()
-        if pname:
-            print(f"Patient: {pname} (id={pid})")
-        streams = create_streams(cfg)
-        paradigm = MotorImageryParadigm(cfg, streams.marker_outlet)
-        paradigm.run()
-    except Exception as e:
-        # Ensure process exits cleanly and surface a readable message in the GUI log
-        print(f"Paradigm process failed: {type(e).__name__}: {e}")
-        return
+    OPRAVA: Vytváří pouze marker outlet (ne EEG inlet).
+    EEG inlet není pro záznam potřeba – data nahrává interní EegRecorder
+    v hlavním procesu, nebo LabRecorder externě.
+    """
+    from .lsl_acquisition import create_marker_outlet
+    from .stimuli.paradigm_base import MotorImageryParadigm
+
+    cfg = load_config()
+    if pname:
+        print(f"Patient: {pname} (id={pid})")
+    marker_outlet = create_marker_outlet(cfg)
+    paradigm = MotorImageryParadigm(cfg, marker_outlet)
+    paradigm.run()
 
 
 class _QueueWriter:
@@ -797,23 +797,52 @@ def _run_selection(selection: GuiSelection) -> None:
     if selection.mode == "record":
         # PsychoPy/pyglet must run in the main thread of a process. Spawn a separate
         # process for the paradigm so its event loop runs in that process's main thread.
-        proc = Process(target=_start_paradigm_proc, args=(selection.patient_profile_id, selection.patient_profile_name))
+        #
+        # Interní EEG recorder běží v tomto vlákně – nahrává EEG z LSL a ukládá FIF.
+        # Pokud LSL není dostupné (žádné EEG zařízení), recorder tiše přeskočí
+        # a zobrazení paradigmatu proběhne normálně.
+        from .config import load_config as _load
+        from .eeg_recorder import EegRecorder
+
+        cfg = _load()
+        patient_name = selection.patient_profile_name or "unknown"
+
+        recorder = EegRecorder(cfg)
+        recorder.start()
+
+        proc = Process(
+            target=_start_paradigm_proc,
+            args=(selection.patient_profile_id, selection.patient_profile_name),
+        )
         proc.start()
         proc.join()
-    
+
+        saved_path = recorder.stop(patient_name=patient_name)
+        if saved_path:
+            print(f"\n💾 EEG záznam uložen: {saved_path}")
+            print(
+                "   Pro trénování: Train Model → vyberte tento soubor\n"
+                "   (FIF formát – kompatibilní s offline analýzou)"
+            )
+        else:
+            print(
+                "\n⚠️  Interní nahrávání nebylo dostupné (žádný LSL stream).\n"
+                "   Pokud jste používali LabRecorder, soubor najdete v jeho výstupní složce."
+            )
+
     elif selection.mode == "offline":
         from .offline_analysis import run_offline_from_file
-        
+
         if not selection.offline_file:
             raise ValueError("No EEG file selected")
-        
+
         acc, n_epochs = run_offline_from_file(selection.offline_file)
-        print(f"\n✓ Training complete: {n_epochs} epochs, accuracy: {acc:.4f}")
-    
+        print(f"\n✓ Trénování dokončeno: {n_epochs} epoch, přesnost: {acc:.4f}")
+
     elif selection.mode == "online":
         from .config import load_config
         from .online_bci import run_online_bci
-        
+
         config = load_config()
         run_online_bci(config)
 
