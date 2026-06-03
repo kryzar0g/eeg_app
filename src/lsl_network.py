@@ -163,6 +163,173 @@ def test_connection(host_or_stream_name: str = "",
     return streams[0]
 
 
+# ─── Ping / dosažitelnost ────────────────────────────────────────────────────
+
+from dataclasses import dataclass
+
+
+@dataclass
+class HostStatus:
+    """Výsledek testu dosažitelnosti hostitele."""
+    host: str
+    reachable: bool          # reaguje na ping / TCP spojení
+    ping_ms: float           # průměrná latence v ms (-1 pokud nedostupné)
+    lsl_port_open: bool      # LSL port 16571 otevřen
+    error: str               # popis chyby (prázdné = OK)
+
+    def __str__(self) -> str:
+        if not self.reachable:
+            return f"{self.host}: NEDOSTUPNY ({self.error})"
+        lsl = "LSL-PORT-OK" if self.lsl_port_open else "LSL-PORT-ZAVRENY"
+        return f"{self.host}: OK  ping={self.ping_ms:.0f}ms  {lsl}"
+
+
+def ping_host(host: str, count: int = 3, timeout_sec: float = 2.0) -> HostStatus:
+    """Otestuje dosažitelnost hostitele přes ICMP ping a TCP LSL port.
+
+    Funguje na Windows i Linux. Firewall může blokovat ICMP – proto
+    fallback přes TCP spojení na port 16571 (LSL).
+
+    Args:
+        host:        IP adresa nebo hostname (např. "192.168.1.100").
+        count:       Počet ping pokusů.
+        timeout_sec: Timeout na jeden pokus v sekundách.
+
+    Returns:
+        HostStatus s výsledkem testu.
+    """
+    import subprocess
+    import platform
+
+    host = host.strip()
+    if not host:
+        return HostStatus(host, False, -1, False, "Prazdna adresa")
+
+    # ── 1. ICMP ping ─────────────────────────────────────────────────
+    system = platform.system().lower()
+    if system == "windows":
+        cmd = ["ping", "-n", str(count), "-w", str(int(timeout_sec * 1000)), host]
+    else:
+        cmd = ["ping", "-c", str(count), "-W", str(int(timeout_sec)), host]
+
+    ping_ms = -1.0
+    reachable = False
+    error = ""
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec * count + 2,
+        )
+        output = result.stdout + result.stderr
+
+        if result.returncode == 0:
+            reachable = True
+            # Parsovat průměrnou latenci z výstupu
+            import re
+            # Windows: "Minimum = Xms, Maximum = Xms, Average = Xms"
+            m = re.search(r"[Aa]verage[^=]*=\s*(\d+)", output)
+            if not m:
+                # Linux: "rtt min/avg/max/mdev = X/X/X/X ms"
+                m = re.search(r"=\s*[\d.]+/([\d.]+)/", output)
+            if m:
+                ping_ms = float(m.group(1))
+        else:
+            error = "Ping selhal (ICMP mozna blokovan firewallom)"
+    except subprocess.TimeoutExpired:
+        error = "Ping timeout"
+    except FileNotFoundError:
+        error = "Prikaz ping nenalezen"
+    except Exception as exc:
+        error = str(exc)
+
+    # ── 2. TCP fallback – LSL port 16571 ─────────────────────────────
+    lsl_port_open = False
+    try:
+        import socket as _socket
+        with _socket.create_connection((host, 16571), timeout=timeout_sec):
+            lsl_port_open = True
+            if not reachable:
+                reachable = True
+                error = ""
+    except OSError:
+        pass  # Port zavreny nebo host nedostupny
+
+    # ── 3. TCP fallback – port 16572 (alternativni LSL port) ─────────
+    if not lsl_port_open:
+        try:
+            import socket as _socket
+            with _socket.create_connection((host, 16572), timeout=timeout_sec):
+                lsl_port_open = True
+                if not reachable:
+                    reachable = True
+                    error = ""
+        except OSError:
+            pass
+
+    return HostStatus(
+        host=host,
+        reachable=reachable,
+        ping_ms=ping_ms,
+        lsl_port_open=lsl_port_open,
+        error=error,
+    )
+
+
+def scan_subnet(
+    subnet: str = "",
+    timeout_sec: float = 0.5,
+    max_workers: int = 50,
+) -> List[HostStatus]:
+    """Prohledá celou podsíť a najde aktivní hostitele.
+
+    Pokud subnet není zadán, odvodí ho z lokální IP adresy.
+
+    Args:
+        subnet:      Prefix podsítě, např. "192.168.1" (bez poslední oktety).
+        timeout_sec: Timeout pro každý ping.
+        max_workers: Počet paralelních vláken.
+
+    Returns:
+        Seznam HostStatus pro dosažitelné hostitele (seřazeno podle IP).
+    """
+    import socket
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Odvodit podsíť z lokální IP pokud není zadána
+    if not subnet:
+        try:
+            local_ip = socket.gethostbyname(socket.gethostname())
+            parts = local_ip.split(".")
+            if len(parts) == 4:
+                subnet = ".".join(parts[:3])
+        except Exception:
+            pass
+    if not subnet:
+        return []
+
+    logger.info("Subnet scan: %s.1-%s.254 (timeout=%.1fs)", subnet, subnet, timeout_sec)
+
+    hosts = [f"{subnet}.{i}" for i in range(1, 255)]
+
+    results: List[HostStatus] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(ping_host, h, 1, timeout_sec): h for h in hosts}
+        for future in as_completed(futures):
+            try:
+                status = future.result()
+                if status.reachable:
+                    results.append(status)
+            except Exception:
+                pass
+
+    results.sort(key=lambda s: tuple(int(x) for x in s.host.split(".")))
+    logger.info("Subnet scan: nalezeno %d aktivnich hostu", len(results))
+    return results
+
+
 # ─── Konfigurace lsl_api.cfg ─────────────────────────────────────────────────
 
 def configure_network(

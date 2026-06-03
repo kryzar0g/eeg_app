@@ -549,8 +549,12 @@ Paradigm:
         btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Button(btn_row, text="Ulozit a zapsat lsl_api.cfg",
                    command=self._on_net_save).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_row, text="Skenovat sit",
-                   command=self._on_net_scan).pack(side="left")
+        ttk.Button(btn_row, text="Ping / Test IP",
+                   command=self._on_net_ping).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Skenovat sit (LSL)",
+                   command=self._on_net_scan).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Sken podsitě (vsechny PC)",
+                   command=self._on_net_subnet_scan).pack(side="left")
 
         # ── Status ────────────────────────────────────────────────────
         status_frame = ttk.LabelFrame(parent, text="Dostupne LSL streamy", padding=10)
@@ -689,6 +693,95 @@ Paradigm:
             self._root.after(0, _update)
 
         self._net_scan_results = []
+        import threading
+        threading.Thread(target=_scan, daemon=True).start()
+
+    def _on_net_ping(self) -> None:
+        """Ping / TCP test zadane IP adresy."""
+        ip = self._net_ip_var.get().strip().split(",")[0].strip()
+        if not ip:
+            self._net_status_var.set("Zadejte IP adresu do pole vyse, pak kliknete Ping / Test IP.")
+            return
+        self._net_status_var.set(f"Testuji {ip} ...")
+        self._net_listbox.delete(0, tk.END)
+        self._net_listbox.insert(tk.END, f"  ping {ip} ...")
+
+        def _ping() -> None:
+            from .lsl_network import ping_host
+            status = ping_host(ip, count=3, timeout_sec=2.0)
+            def _update() -> None:
+                self._net_listbox.delete(0, tk.END)
+                if status.reachable:
+                    ping_str = f"{status.ping_ms:.0f} ms" if status.ping_ms >= 0 else "neznamo"
+                    lsl_str  = "LSL port 16571 OTEVRENY" if status.lsl_port_open else "LSL port 16571 zavreny"
+                    line = f"  [OK]  {ip}   ping={ping_str}   {lsl_str}"
+                    self._net_listbox.insert(tk.END, line)
+                    self._net_listbox.itemconfig(0, fg="#50fa7b")
+                    self._net_status_var.set(
+                        f"Pocitac {ip} je dosazitelny (ping={ping_str}).\n"
+                        + (
+                            "LSL port je OTEVRENY – muzete spustit sken LSL streamu."
+                            if status.lsl_port_open
+                            else "LSL port je zavreny – spustte LSL software na cilovem PC (LabRecorder, OpenVibe...)."
+                        )
+                    )
+                else:
+                    line = f"  [FAIL] {ip}  NEDOSTUPNY – {status.error}"
+                    self._net_listbox.insert(tk.END, line)
+                    self._net_listbox.itemconfig(0, fg="#ff5555")
+                    self._net_status_var.set(
+                        f"Pocitac {ip} neodpovida.\n"
+                        "Zkontrolujte:\n"
+                        "  * Je zarizeni zapnuto a pripojeno ke stejnemu switchi/AP?\n"
+                        "  * Neni firewall blokujici ICMP ping?\n"
+                        "  * Je IP adresa spravna? (zkuste Sken podsitě)"
+                    )
+            self._root.after(0, _update)
+
+        import threading
+        threading.Thread(target=_ping, daemon=True).start()
+
+    def _on_net_subnet_scan(self) -> None:
+        """Prohledá celou podsíť a zobrazí všechny aktivní pocitace."""
+        self._net_status_var.set("Skenuji podsit... (muze trvat 15-30 sekund)")
+        self._net_listbox.delete(0, tk.END)
+        self._net_listbox.insert(tk.END, "  skenování 254 adres paralelne...")
+
+        def _scan() -> None:
+            from .lsl_network import scan_subnet
+            subnet_hint = ""
+            raw_ip = self._net_ip_var.get().strip().split(",")[0].strip()
+            if raw_ip:
+                parts = raw_ip.split(".")
+                if len(parts) >= 3:
+                    subnet_hint = ".".join(parts[:3])
+            results = scan_subnet(subnet=subnet_hint, timeout_sec=0.4, max_workers=64)
+
+            def _update() -> None:
+                self._net_listbox.delete(0, tk.END)
+                if not results:
+                    self._net_listbox.insert(tk.END, "  zadne aktivni pocitace nenalezeny")
+                    self._net_status_var.set(
+                        "Zadne pocitace nenalezeny. Zkontrolujte pripojeni k siti."
+                    )
+                    return
+
+                self._net_status_var.set(
+                    f"Nalezeno {len(results)} aktivnich zarízení na siti. "
+                    "Zelene = ma otevreny LSL port."
+                )
+                for s in results:
+                    ping_str = f"{s.ping_ms:.0f}ms" if s.ping_ms >= 0 else "?"
+                    lsl_tag  = " [LSL]" if s.lsl_port_open else ""
+                    line = f"  {s.host:<16}  ping={ping_str:<8}{lsl_tag}"
+                    self._net_listbox.insert(tk.END, line)
+                    # Barva: LSL otevreny = zelena, jen dosazitelny = bila
+                    color = "#50fa7b" if s.lsl_port_open else "#d4d4d4"
+                    idx = self._net_listbox.size() - 1
+                    self._net_listbox.itemconfig(idx, fg=color)
+
+            self._root.after(0, _update)
+
         import threading
         threading.Thread(target=_scan, daemon=True).start()
 
