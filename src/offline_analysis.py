@@ -265,28 +265,43 @@ def _prepare_epochs_from_status(raw: mne.io.BaseRaw, config: AppConfig) -> mne.E
   try:
     events = mne.find_events(raw, stim_channel="Status", shortest_event=1, verbose="ERROR")
   except Exception as e:
-    raise RuntimeError(f"Nepodařilo se načíst markery ze Status kanálu: {e}") from e
+    raise RuntimeError(f"Failed to read markers from Status channel: {e}") from e
 
   if events.size == 0:
     raise RuntimeError(
-      "BDF Status kanál neobsahuje žádné markery. "
-      "Zkontrolujte, zda byl záznam pořízen interním EegRecorderem."
+      "BDF Status channel contains no markers. "
+      "Check that the recording was made with the internal EegRecorder."
     )
 
-  # Sestavit event_id: kódy z paradigmatu nebo ze všech nalezených událostí
+  # Sestavit event_id pouze z kodu SKUTECNE PRITOMNYCH v zaznamu.
+  # Pokud zaznam zachytil jen cast trid (kratky zapis, test), nepouzivat
+  # event_id z config - ten obsahuje vsechny tridy a MNE by hodil chybu
+  # "No matching events found for X".
+  present_codes = set(int(c) for c in np.unique(events[:, 2]))
+
   class_map = config.paradigm.get("classes", {})
   if class_map:
-    event_id = {str(label): int(code) for label, code in class_map.items()}
-    # Filtrovat události na platné kódy
+    # Pouzit jen tridy ktere maji alespon jeden event v zaznamu
+    event_id = {
+      str(label): int(code)
+      for label, code in class_map.items()
+      if int(code) in present_codes
+    }
+    if not event_id:
+      raise RuntimeError(
+        f"Status channel events {present_codes} do not match any class in config.yaml "
+        f"(expected codes: {set(class_map.values())})"
+      )
+    missing = {l for l, c in class_map.items() if int(c) not in present_codes}
+    if missing:
+      logger.warning("Classes missing from recording (not enough trials?): %s", missing)
+    # Filtrovat events na platne kody
     valid_codes = set(event_id.values())
     events = events[np.isin(events[:, 2], list(valid_codes))]
-    if events.size == 0:
-      raise RuntimeError("Status kanál neobsahuje události odpovídající třídám v config.yaml")
   else:
-    unique_codes = np.unique(events[:, 2])
-    event_id = {str(c): int(c) for c in unique_codes}
+    event_id = {str(c): int(c) for c in present_codes}
 
-  logger.info(f"Status kanál: nalezeno {len(events)} událostí, třídy: {event_id}")
+  logger.info("Status channel: found %d events, classes: %s", len(events), event_id)
 
   epochs = mne.Epochs(
     raw.copy().pick("eeg"),
@@ -296,9 +311,10 @@ def _prepare_epochs_from_status(raw: mne.io.BaseRaw, config: AppConfig) -> mne.E
     tmax=tmax,
     baseline=None,
     preload=True,
+    on_missing="warn",   # varovat misto vyjimky pokud chybi trieda
     verbose="ERROR",
   )
-  logger.info(f"Vytvořeno {len(epochs)} epoch z BDF Status kanálu")
+  logger.info("Created %d epochs from BDF Status channel", len(epochs))
   return epochs
 
 

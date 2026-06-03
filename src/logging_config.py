@@ -3,58 +3,73 @@ import logging
 import logging.handlers
 import sys
 from pathlib import Path
-import os
 
 __all__ = ["get_logger", "setup_logging"]
 
 
-def setup_logging(log_dir: str | Path = "logs", level: str = "INFO") -> Path:
-    """Configure application-wide logging.
-    
-    Args:
-        log_dir: Directory for log files.
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
-    
-    Returns:
-        Path to log directory.
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler ktery nikdy nespadne na UnicodeEncodeError.
+
+    Na Windows s cp1252 konzoli nahrazuje neznake znaky '?'
+    misto vyhazovani vyjimky ktera by prerusila vlakno.
     """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                # Fallback: zakodovat s nahradou neznakych znaku
+                safe = (msg + self.terminator).encode(
+                    getattr(stream, "encoding", "utf-8") or "utf-8",
+                    errors="replace",
+                ).decode(
+                    getattr(stream, "encoding", "utf-8") or "utf-8",
+                    errors="replace",
+                )
+                stream.write(safe)
+            self.flush()
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
+
+
+def setup_logging(log_dir: str | Path = "logs", level: str = "INFO") -> Path:
+    """Configure application-wide logging with Unicode-safe console output."""
     log_dir = Path(log_dir)
     log_dir.mkdir(exist_ok=True)
-    
-    # Root logger configuration
+
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, level))
-    
-    if root_logger.handlers:
-        return log_dir
-    
+    root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+    # Odstranit existujici handlery (vcetne Python lastResort s cp1252)
+    for h in root_logger.handlers[:]:
+        root_logger.removeHandler(h)
+        h.close()
+
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
-    # File handler (rotating)
+
+    # File handler (UTF-8, rotating)
     file_handler = logging.handlers.RotatingFileHandler(
         log_dir / "eeg_app.log",
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
-    
-    # Console handler – UTF-8 s fallbackem na '?' pro znaky mimo cp1252
-    try:
-        utf8_stream = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-        )
-        console_handler = logging.StreamHandler(stream=utf8_stream)
-    except AttributeError:
-        # stdout nema .buffer (napr. IDLE, redirected) – pouzit errors=replace
-        console_handler = logging.StreamHandler()
-        console_handler.stream.errors = "replace"  # type: ignore[attr-defined]
+
+    # Console handler – bezpecny vuci cp1252
+    console_handler = _SafeStreamHandler(stream=sys.stdout)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
-    
+
     return log_dir
 
 
