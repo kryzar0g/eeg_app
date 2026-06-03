@@ -589,23 +589,27 @@ Paradigm:
         self._net_listbox.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        # Legenda
-        leg = ttk.Frame(status_frame)
-        leg.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        tk.Label(leg, text="  [LOCAL]  ", bg="#1e1e1e", fg="#50fa7b",
-                 font=("Courier", 9)).pack(side="left")
-        tk.Label(leg, text="= primo na tomto pocitaci  ",
-                 font=("Courier", 9)).pack(side="left")
-        tk.Label(leg, text="  [NETWORK]  ", bg="#1e1e1e", fg="#ffb86c",
-                 font=("Courier", 9)).pack(side="left")
-        tk.Label(leg, text="= pres sit (jiny pocitac/zarizeni)",
-                 font=("Courier", 9)).pack(side="left")
-
         ttk.Button(
             status_frame,
             text="Pouzit vybrany stream (nastavit jako EEG zdroj)",
             command=self._on_net_use_selected,
-        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=1, column=0, sticky="w", pady=(8, 4))
+
+        # Legenda – pod tlacitkem, aby nezasahovala do terminaloveho vystupu
+        leg = ttk.Frame(status_frame)
+        leg.grid(row=2, column=0, sticky="w", pady=(0, 2))
+        tk.Label(leg, text="  [LOCAL]  ", bg="#1e1e1e", fg="#50fa7b",
+                 font=("Courier", 8)).pack(side="left")
+        tk.Label(leg, text="= primo na tomto pocitaci  ",
+                 font=("Courier", 8)).pack(side="left")
+        tk.Label(leg, text="  [NETWORK]  ", bg="#1e1e1e", fg="#ffb86c",
+                 font=("Courier", 8)).pack(side="left")
+        tk.Label(leg, text="= pres sit (jiny pocitac/zarizeni)  ",
+                 font=("Courier", 8)).pack(side="left")
+        tk.Label(leg, text="  [LSL]  ", bg="#1e1e1e", fg="#50fa7b",
+                 font=("Courier", 8)).pack(side="left")
+        tk.Label(leg, text="= otevreny LSL port",
+                 font=("Courier", 8)).pack(side="left")
 
         # ── lsl_api.cfg info ─────────────────────────────────────────
         cfg_frame = ttk.LabelFrame(parent, text="lsl_api.cfg", padding=8)
