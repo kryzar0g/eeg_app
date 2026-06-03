@@ -37,8 +37,10 @@ def _load_raw(file_path: Path) -> mne.io.BaseRaw:
     else:  # .fif – výstup interního EegRecorderu
       raw = mne.io.read_raw_fif(file_path, preload=True, verbose="ERROR")
 
+    n_ch = len(raw.ch_names)  # raw.n_channels neexistuje ve starších verzích MNE
+    n_times = raw.n_times if hasattr(raw, "n_times") else raw.last_samp - raw.first_samp + 1
     logger.info(
-      f"Loaded {file_path.name}: {raw.n_channels} channels, {raw.n_times} samples @ {raw.info['sfreq']} Hz"
+      f"Loaded {file_path.name}: {n_ch} channels, {n_times} samples @ {raw.info['sfreq']} Hz"
     )
     return raw
   except Exception as e:
