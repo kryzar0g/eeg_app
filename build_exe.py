@@ -9,10 +9,11 @@ Výstup:
     dist/eeg_app_portable/     (to samé, přejmenováno pro distribuci)
 
 Poznámky:
-    • PsychoPy vyžaduje DLL pro OpenGL a wxWidgets – PyInstaller je zahrne automaticky
+    • MNE používá lazy_loader – .pyi stub soubory musí být v bundlu
+      (--collect-data mne toto řeší automaticky)
+    • PsychoPy vyžaduje DLL pro OpenGL/wxWidgets – zahrnuty automaticky
     • pylsl potřebuje liblsl.dll (Windows) → zkopírováno z site-packages/pylsl
-    • Ujistěte se, že jste v aktivním .venv310 nebo conda prostředí s nainstalovanými závislostmi
-    • Kompilace trvá 3-10 minut a výsledek může mít 300+ MB kvůli scipy/MNE/PsychoPy
+    • Kompilace trvá 5-15 minut, výsledek ~400–600 MB kvůli MNE/PsychoPy/scipy
 """
 
 import subprocess
@@ -22,109 +23,155 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-VENV_PYTHON = PROJECT_ROOT / ".venv310" / "Scripts" / "python.exe"
-DIST_DIR = PROJECT_ROOT / "dist"
-BUILD_DIR = PROJECT_ROOT / "build"
+VENV_PYTHON  = PROJECT_ROOT / ".venv310" / "Scripts" / "python.exe"
+DIST_DIR     = PROJECT_ROOT / "dist"
+SEP          = ";" if sys.platform == "win32" else ":"
 
 
 def _find_python() -> str:
-    """Najde Python interpreter pro build."""
     if VENV_PYTHON.is_file():
         return str(VENV_PYTHON)
     return sys.executable
 
 
-def _find_liblsl() -> list[tuple[str, str]]:
-    """Najde liblsl.dll pro pylsl a vrátí ho jako bindata pro PyInstaller."""
+def _find_liblsl() -> list:
+    """Najde liblsl.dll pro pylsl."""
     try:
         import pylsl
         pylsl_dir = Path(pylsl.__file__).parent
-        dll_candidates = list(pylsl_dir.glob("*.dll")) + list(pylsl_dir.glob("lib/*.dll"))
-        if dll_candidates:
-            dll = dll_candidates[0]
-            return [(str(dll), ".")]
+        for pattern in ("*.dll", "lib/*.dll", "**/*.dll"):
+            hits = list(pylsl_dir.glob(pattern))
+            if hits:
+                return [(str(hits[0]), ".")]
+    except ImportError:
+        pass
+    return []
+
+
+def _mne_pyi_data() -> list:
+    """Vrátí --add-data argument pro mne/__init__.pyi stub soubor.
+
+    MNE lazy_loader vyžaduje tento soubor přímo vedle mne/__init__.py.
+    Pokud stub neexistuje (starší MNE), vrátí prázdný seznam.
+    """
+    try:
+        import mne
+        pyi = Path(mne.__file__).parent / "__init__.pyi"
+        if pyi.exists():
+            return [(str(pyi), "mne")]
     except ImportError:
         pass
     return []
 
 
 def build():
-    python = _find_python()
-    liblsl_binaries = _find_liblsl()
+    python         = _find_python()
+    liblsl_bins    = _find_liblsl()
+    mne_pyi        = _mne_pyi_data()
 
-    # Sestavit --add-binary argumenty pro liblsl
+    sep = SEP
+
+    # --add-binary pro liblsl
     binary_args = []
-    for src, dst in liblsl_binaries:
-        binary_args += ["--add-binary", f"{src}{';' if sys.platform == 'win32' else ':'}{dst}"]
+    for src, dst in liblsl_bins:
+        binary_args += ["--add-binary", f"{src}{sep}{dst}"]
+
+    # --add-data pro mne .pyi stub (fix lazy_loader ValueError)
+    pyi_args = []
+    for src, dst in mne_pyi:
+        pyi_args += ["--add-data", f"{src}{sep}{dst}"]
 
     cmd = [
         python, "-m", "PyInstaller",
         "--name", "eeg_app",
-        "--onedir",                    # složka (rychlejší start než --onefile)
-        "--windowed",                  # bez konzole (okno)
+        "--onedir",       # složka = rychlejší start než --onefile
+        "--windowed",     # bez konzole (GUI aplikace)
         "--clean",
         "--noconfirm",
+
         # Ikona (pokud existuje)
-        *( ["--icon", str(PROJECT_ROOT / "assets" / "icon.ico")]
-           if (PROJECT_ROOT / "assets" / "icon.ico").exists() else [] ),
-        # Zahrnout config a data složky
-        "--add-data", f"{PROJECT_ROOT / 'config'};config",
-        "--add-data", f"{PROJECT_ROOT / 'src'};src",
+        *(["--icon", str(PROJECT_ROOT / "assets" / "icon.ico")]
+          if (PROJECT_ROOT / "assets" / "icon.ico").exists() else []),
+
+        # ── Data ────────────────────────────────────────────────────
+        "--add-data", f"{PROJECT_ROOT / 'config'}{sep}config",
+        "--add-data", f"{PROJECT_ROOT / 'src'}{sep}src",
+
+        # MNE .pyi stub – oprava "Cannot load imports from non-existent stub"
+        *pyi_args,
+
+        # --collect-data zahrne VSE datové soubory balíku (včetně .pyi stubů)
+        # Toto je nejspolehlivější oprava pro mne + lazy_loader
+        "--collect-data", "mne",
+        "--collect-data", "lazy_loader",
+
         # pylsl DLL
         *binary_args,
-        # Skryté importy – MNE, psychopy a sklearn mohou mít dynamické importy
+
+        # ── Skryté importy ───────────────────────────────────────────
         "--hidden-import", "mne",
+        "--hidden-import", "mne.io",
+        "--hidden-import", "mne.io.edf",
+        "--hidden-import", "mne.export",
+        "--hidden-import", "edfio",
         "--hidden-import", "sklearn.utils._cython_blas",
         "--hidden-import", "sklearn.neighbors._typedefs",
         "--hidden-import", "sklearn.tree._utils",
+        "--hidden-import", "sklearn.discriminant_analysis",
+        "--hidden-import", "sklearn.svm",
         "--hidden-import", "psychopy",
         "--hidden-import", "psychopy.visual",
         "--hidden-import", "psychopy.event",
         "--hidden-import", "psychopy.core",
         "--hidden-import", "pylsl",
         "--hidden-import", "joblib",
+        "--hidden-import", "joblib.externals.loky.backend.managers",
         "--hidden-import", "scipy.signal",
         "--hidden-import", "scipy.linalg",
-        # Vyloučit velké nepoužívané balíky
+        "--hidden-import", "scipy.sparse.csgraph._validation",
+        "--hidden-import", "pydantic",
+        "--hidden-import", "yaml",
+
+        # ── Vyloučit nepotřebné velké balíky ────────────────────────
         "--exclude-module", "matplotlib.tests",
         "--exclude-module", "numpy.testing",
         "--exclude-module", "pytest",
         "--exclude-module", "sphinx",
+        "--exclude-module", "IPython",
+        "--exclude-module", "jupyter",
+
         # Entry point
         str(PROJECT_ROOT / "run_app.py"),
     ]
 
     print("=" * 60)
-    print("EEG App – sestavení EXE")
+    print("EEG App – sestaveni EXE")
     print("=" * 60)
-    print(f"Python:  {python}")
-    print(f"Výstup:  {DIST_DIR / 'eeg_app'}")
-    if liblsl_binaries:
-        print(f"liblsl:  {liblsl_binaries[0][0]}")
-    else:
-        print("liblsl:  NENALEZENO – ručně zkopírujte liblsl.dll do dist/eeg_app/")
+    print(f"Python : {python}")
+    print(f"Vystup : {DIST_DIR / 'eeg_app'}")
+    print(f"liblsl : {liblsl_bins[0][0] if liblsl_bins else 'NENALEZENO'}")
+    print(f"mne.pyi: {mne_pyi[0][0] if mne_pyi else 'nenalezeno (collect-data MNE pokryje)'}")
     print()
 
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
 
     if result.returncode != 0:
-        print("\n✗ Sestavení selhalo!")
+        print("\nSesteveni selhalo! Viz vystup nahore.")
         sys.exit(result.returncode)
 
-    print("\n✓ Sestavení dokončeno!")
-    print(f"  Výsledek: {DIST_DIR / 'eeg_app' / 'eeg_app.exe'}")
-    print()
-    print("Distribuční balík:")
+    print("\nSesteveni dokonceno!")
+    print(f"  EXE: {DIST_DIR / 'eeg_app' / 'eeg_app.exe'}")
+
     portable = DIST_DIR / "eeg_app_portable"
     if portable.exists():
         shutil.rmtree(portable)
     shutil.copytree(DIST_DIR / "eeg_app", portable)
-    print(f"  {portable}")
+    print(f"  Prenosny balik: {portable}")
     print()
-    print("Poznámky:")
-    print("  • Zkopírujte složku eeg_app_portable na cílový počítač")
-    print("  • Spusťte eeg_app.exe (nevyžaduje Python)")
-    print("  • config/ složka je v dist/eeg_app/config/ – lze upravovat")
+    print("Pouziti:")
+    print("  Zkopirujte slozku eeg_app_portable na cilovy pocitac")
+    print("  Spustte eeg_app.exe (nevyzaduje Python)")
+    print("  config/ slozka je v dist/eeg_app/config/ – lze upravovat")
 
 
 if __name__ == "__main__":
