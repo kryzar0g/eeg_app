@@ -12,10 +12,10 @@ Tento modul zajistuje:
 from __future__ import annotations
 
 import logging
-import os
+import socket
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,23 +26,58 @@ _CFG_CANDIDATES = [
 ]
 
 
-# ─── Data třídy ──────────────────────────────────────────────────────────────
+def _local_hostnames() -> set:
+    """Vrátí množinu názvů tohoto počítače (hostname + varianty)."""
+    names = set()
+    try:
+        h = socket.gethostname()
+        names.add(h.lower())
+        names.add(h.split(".")[0].lower())          # bez domény
+        names.add(socket.getfqdn(h).lower())        # plné jméno
+        # Přidat lokální IP adresy
+        for info in socket.getaddrinfo(h, None):
+            names.add(info[4][0].lower())
+    except Exception:
+        pass
+    names.update({"localhost", "127.0.0.1", "::1"})
+    return names
+
+
+# Singleton – vypočteme jednou
+_LOCAL_NAMES: set = set()
+
+
+def _is_local(hostname: str) -> bool:
+    """Vrátí True pokud stream pochází z tohoto počítače."""
+    global _LOCAL_NAMES
+    if not _LOCAL_NAMES:
+        _LOCAL_NAMES = _local_hostnames()
+    return hostname.lower() in _LOCAL_NAMES
+
+
+# ─── Data třída ──────────────────────────────────────────────────────────────
 
 class StreamDesc:
     """Popis nalezeného LSL streamu."""
 
     def __init__(self, info: Any) -> None:
-        self.name: str       = info.name()
+        self.name: str        = info.name()
         self.stream_type: str = info.type()
-        self.channels: int   = info.channel_count()
-        self.sfreq: float    = float(info.nominal_srate())
-        self.hostname: str   = info.hostname()
-        self.source_id: str  = info.source_id()
-        self._info           = info
+        self.channels: int    = info.channel_count()
+        self.sfreq: float     = float(info.nominal_srate())
+        self.hostname: str    = info.hostname()
+        self.source_id: str   = info.source_id()
+        self.is_local: bool   = _is_local(info.hostname())
+        self._info            = info
+
+    @property
+    def source_label(self) -> str:
+        """'LOCAL' nebo 'NETWORK' – odkud stream pochází."""
+        return "LOCAL" if self.is_local else "NETWORK"
 
     def __str__(self) -> str:
         return (
-            f"{self.name} [{self.stream_type}] "
+            f"[{self.source_label}] {self.name} [{self.stream_type}] "
             f"{self.channels}ch @ {self.sfreq:.0f}Hz  "
             f"host={self.hostname}"
         )

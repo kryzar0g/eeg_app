@@ -577,11 +577,25 @@ Paradigm:
             fg="#d4d4d4",
             selectbackground="#0066cc",
         )
+        # Barevné označení: LOCAL = zelená, NETWORK = žlutá
+        self._net_listbox.tag_configure = None  # placeholder
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical",
                                   command=self._net_listbox.yview)
         self._net_listbox.configure(yscrollcommand=scrollbar.set)
         self._net_listbox.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # Legenda
+        leg = ttk.Frame(status_frame)
+        leg.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tk.Label(leg, text="  [LOCAL]  ", bg="#1e1e1e", fg="#50fa7b",
+                 font=("Courier", 9)).pack(side="left")
+        tk.Label(leg, text="= primo na tomto pocitaci  ",
+                 font=("Courier", 9)).pack(side="left")
+        tk.Label(leg, text="  [NETWORK]  ", bg="#1e1e1e", fg="#ffb86c",
+                 font=("Courier", 9)).pack(side="left")
+        tk.Label(leg, text="= pres sit (jiny pocitac/zarizeni)",
+                 font=("Courier", 9)).pack(side="left")
 
         ttk.Button(
             status_frame,
@@ -631,34 +645,47 @@ Paradigm:
         def _scan() -> None:
             from .lsl_network import scan_streams
             results = scan_streams(timeout=5.0)
+
             def _update() -> None:
                 self._net_listbox.delete(0, tk.END)
                 if not results:
                     self._net_status_var.set(
                         "Zadne LSL streamy nenalezeny. Zkontrolujte:\n"
-                        "  • Je EEG zarizeni zapnuto a pripojeno ke stejne siti?\n"
-                        "  • Je firewall nastaven pro LSL (port 16571-16604)?\n"
-                        "  • Pro jinou podsit zadejte IP adresu vyse."
+                        "  * Je EEG zarizeni zapnuto a pripojeno ke stejne siti?\n"
+                        "  * Je firewall nastaven pro LSL (port 16571-16604)?\n"
+                        "  * Pro jinou podsit zadejte IP adresu vyse."
                     )
                     self._net_listbox.insert(tk.END, "  (zadne streamy)")
                 else:
+                    n_local   = sum(1 for s in results if s.is_local)
+                    n_network = len(results) - n_local
                     self._net_status_var.set(
-                        f"Nalezeno {len(results)} streamu. "
+                        f"Nalezeno {len(results)} streamu  "
+                        f"({n_local} LOCAL, {n_network} NETWORK). "
                         "Vyberte EEG stream a kliknete 'Pouzit vybrany stream'."
                     )
-                    for s in results:
-                        icon = "EEG" if s.stream_type.upper() == "EEG" else "   "
-                        self._net_listbox.insert(
-                            tk.END,
-                            f"[{icon}] {s.name}  {s.channels}ch@{s.sfreq:.0f}Hz  {s.hostname}"
+                    for i, s in enumerate(results):
+                        eeg_marker = "EEG    " if s.stream_type.upper() == "EEG" else s.stream_type.ljust(7)
+                        line = (
+                            f"[{s.source_label:<7}] "
+                            f"[{eeg_marker}] "
+                            f"{s.name:<20} "
+                            f"{s.channels}ch@{s.sfreq:.0f}Hz  "
+                            f"{s.hostname}"
                         )
+                        self._net_listbox.insert(tk.END, line)
+                        # Barva: LOCAL=zelena, NETWORK=oranzova
+                        color = "#50fa7b" if s.is_local else "#ffb86c"
+                        self._net_listbox.itemconfig(i, fg=color)
+
                     # Oznacit prvni EEG stream
                     for i, s in enumerate(results):
                         if s.stream_type.upper() == "EEG":
                             self._net_listbox.selection_set(i)
                             break
-                # Ulozit vysledky pro _on_net_use_selected
+
                 self._net_scan_results = results
+
             self._root.after(0, _update)
 
         self._net_scan_results = []
@@ -674,14 +701,21 @@ Paradigm:
         idx = sel[0]
         if idx >= len(results):
             return
-        stream = results[idx]
+        s = results[idx]
         if self._config:
-            self._config.lsl.eeg_stream_name = stream.name
-            self._config.lsl.eeg_stream_type = stream.stream_type
+            self._config.lsl.eeg_stream_name = s.name
+            self._config.lsl.eeg_stream_type = s.stream_type
+        source_info = (
+            "primo na tomto pocitaci (LOCAL)"
+            if s.is_local
+            else f"pres sit ze zarizeni '{s.hostname}' (NETWORK)"
+        )
         self._net_status_var.set(
-            f"Nastaveno: {stream.name} [{stream.stream_type}] "
-            f"{stream.channels}ch @ {stream.sfreq:.0f}Hz  (host: {stream.hostname})\n"
-            f"Toto nastaveni plati pro tuto session. Pro trvale ulozeni upravte config.yaml."
+            f"Nastaveno: {s.name} [{s.stream_type}] "
+            f"{s.channels}ch @ {s.sfreq:.0f}Hz\n"
+            f"Zdroj: {source_info}\n"
+            f"Toto nastaveni plati pro tuto session. "
+            f"Pro trvale ulozeni zmente config.yaml: lsl.eeg_stream_name: \"{s.name}\""
         )
 
     def _build_record_page(self, parent: ttk.Frame) -> None:
