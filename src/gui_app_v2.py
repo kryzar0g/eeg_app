@@ -658,14 +658,61 @@ Paradigm:
             self._config.lsl.known_peers = peers
 
     def _on_net_scan(self) -> None:
-        """Spusti skenovani LSL streamu na siti (v pozadi)."""
-        self._net_status_var.set("Skenuju sit... (az 5 sekund)")
+        """Spusti skenovani LSL streamu (subprocess – nacte cerstvy lsl_api.cfg)."""
+        self._net_status_var.set("Skenuju sit... (az 8 sekund)")
         self._net_listbox.delete(0, tk.END)
-        self._net_listbox.insert(tk.END, "  hledam streamy...")
+        self._net_listbox.insert(tk.END, "  hledam streamy pres novy proces (nacte KnownPeers)...")
 
         def _scan() -> None:
-            from .lsl_network import scan_streams
-            results = scan_streams(timeout=5.0)
+            # Pouzit subprocess aby se nacetl cerstvy lsl_api.cfg s KnownPeers.
+            # liblsl cte konfiguraci pri inicializaci – pokud uzivatel ulozil
+            # lsl_api.cfg az po startu aplikace, subprocess ho nacte spravne.
+            import subprocess, sys, json as _json, os as _os
+            from pathlib import Path
+
+            project_root = str(Path(__file__).resolve().parents[1])
+            scan_script = (
+                "import sys, json; sys.path.insert(0, r'" + project_root + "'); "
+                "from pylsl import resolve_streams; "
+                "streams = resolve_streams(wait_time=6.0); "
+                "print(json.dumps([{"
+                "'name': s.name(), 'type': s.type(), "
+                "'channels': s.channel_count(), 'sfreq': s.nominal_srate(), "
+                "'hostname': s.hostname(), 'source_id': s.source_id()"
+                "} for s in streams]))"
+            )
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-c", scan_script],
+                    capture_output=True, text=True, timeout=12,
+                )
+                raw_out = proc.stdout.strip()
+                # Najit JSON radek (posledni radek)
+                for line in reversed(raw_out.splitlines()):
+                    line = line.strip()
+                    if line.startswith("["):
+                        data = _json.loads(line)
+                        from .lsl_network import StreamDesc, _is_local
+                        # Simulovat StreamDesc ze slovniku
+                        class _FakeInfo:
+                            def __init__(self, d):
+                                self._d = d
+                            def name(self): return self._d["name"]
+                            def type(self): return self._d["type"]
+                            def channel_count(self): return self._d["channels"]
+                            def nominal_srate(self): return self._d["sfreq"]
+                            def hostname(self): return self._d["hostname"]
+                            def source_id(self): return self._d.get("source_id", "")
+                        results = [StreamDesc(_FakeInfo(d)) for d in data]
+                        break
+                else:
+                    results = []
+                    if proc.stderr:
+                        logger.debug("scan subprocess stderr: %s", proc.stderr[:300])
+            except Exception as exc:
+                logger.warning("Subprocess scan selhal: %s – fallback na primy scan", exc)
+                from .lsl_network import scan_streams
+                results = scan_streams(timeout=5.0)
 
             def _update() -> None:
                 self._net_listbox.delete(0, tk.END)
@@ -1008,17 +1055,32 @@ Paradigm:
 
     def _check_lsl_stream_before_record(self) -> bool:
         """Rychla kontrola LSL streamu pred zahajenim. Vraci True = pokracovat."""
+        import subprocess, sys, json as _json
+        from pathlib import Path
+        project_root = str(Path(__file__).resolve().parents[1])
+        scan_script = (
+            "import sys, json; sys.path.insert(0, r'" + project_root + "'); "
+            "from pylsl import resolve_streams; "
+            "s = resolve_streams(wait_time=4.0); "
+            "print(json.dumps([{'name': x.name(), 'type': x.type()} for x in s]))"
+        )
+        streams = []
         try:
-            from .lsl_network import scan_streams
-            streams = scan_streams(timeout=3.0, stream_type="EEG")
+            proc = subprocess.run(
+                [sys.executable, "-c", scan_script],
+                capture_output=True, text=True, timeout=8,
+            )
+            for line in reversed(proc.stdout.strip().splitlines()):
+                line = line.strip()
+                if line.startswith("["):
+                    streams = _json.loads(line)
+                    break
         except Exception:
-            streams = []
+            pass
 
         if streams:
-            # Stream nalezen - vse OK, jen zobrazit info
             s = streams[0]
-            source = "LOCAL" if s.is_local else f"NETWORK ({s.hostname})"
-            logger.info("LSL EEG stream nalezen: %s [%s]", s.name, source)
+            logger.info("LSL EEG stream nalezen: %s [%s]", s.get("name"), s.get("type"))
             return True
 
         # Stream nenalezen - zeptat se uzivatele

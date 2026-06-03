@@ -406,7 +406,13 @@ def configure_network(
     if not written:
         raise RuntimeError("Nepodarilo se zapsat lsl_api.cfg do zadneho umisteni")
 
-    return written[0]
+    # Nastavit LSLAPICFG env variable – liblsl ji cte pri kazdem volani,
+    # takze zmena se projevI ihned bez restartu aplikace.
+    primary = written[0]
+    _os.environ["LSLAPICFG"] = str(primary)
+    logger.info("LSLAPICFG env nastavena: %s", primary)
+
+    return primary
 
 
 def get_lsl_cfg_path() -> Optional[Path]:
