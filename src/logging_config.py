@@ -8,27 +8,24 @@ __all__ = ["get_logger", "setup_logging"]
 
 
 class _SafeStreamHandler(logging.StreamHandler):
-    """StreamHandler ktery nikdy nespadne na UnicodeEncodeError.
+    """StreamHandler ktery nikdy nespadne na UnicodeEncodeError ani None stdout.
 
-    Na Windows s cp1252 konzoli nahrazuje neznake znaky '?'
-    misto vyhazovani vyjimky ktera by prerusila vlakno.
+    - Na Windows s cp1252 konzoli nahrazuje neznake znaky '?'
+    - V PyInstaller --windowed EXE je stdout=None: zpravy se tiše zahodi
     """
 
     def emit(self, record: logging.LogRecord) -> None:
+        # V --windowed EXE muze byt stream None
+        if self.stream is None:
+            return
         try:
             msg = self.format(record)
             stream = self.stream
             try:
                 stream.write(msg + self.terminator)
             except UnicodeEncodeError:
-                # Fallback: zakodovat s nahradou neznakych znaku
-                safe = (msg + self.terminator).encode(
-                    getattr(stream, "encoding", "utf-8") or "utf-8",
-                    errors="replace",
-                ).decode(
-                    getattr(stream, "encoding", "utf-8") or "utf-8",
-                    errors="replace",
-                )
+                enc = getattr(stream, "encoding", "utf-8") or "utf-8"
+                safe = (msg + self.terminator).encode(enc, errors="replace").decode(enc, errors="replace")
                 stream.write(safe)
             self.flush()
         except RecursionError:

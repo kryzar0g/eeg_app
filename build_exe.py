@@ -93,7 +93,9 @@ def build():
         *(["--icon", str(PROJECT_ROOT / "assets" / "icon.ico")]
           if (PROJECT_ROOT / "assets" / "icon.ico").exists() else []),
 
-        # ── Data ────────────────────────────────────────────────────
+        # ── Data (config/ musi byt VEDLE .exe, ne uvnitr _internal/) ──
+        # run_app.py pouziva sys.executable.parent jako PROJECT_ROOT,
+        # takze config/ musi byt primo v dist/eeg_app/ (ne v _internal/).
         "--add-data", f"{PROJECT_ROOT / 'config'}{sep}config",
         "--add-data", f"{PROJECT_ROOT / 'src'}{sep}src",
 
@@ -132,6 +134,12 @@ def build():
         "--hidden-import", "pydantic",
         "--hidden-import", "yaml",
 
+        # ── multiprocessing freeze_support (KRIT. pro Windows EXE) ──
+        # Bez tohoto spawnovany proces (paradigma) znovu spusti
+        # cely EXE jako modul = nekonecna smycka / crash.
+        "--hidden-import", "multiprocessing.spawn",
+        "--hidden-import", "multiprocessing.forkserver",
+
         # ── Vyloučit nepotřebné velké balíky ────────────────────────
         "--exclude-module", "matplotlib.tests",
         "--exclude-module", "numpy.testing",
@@ -159,19 +167,34 @@ def build():
         print("\nSesteveni selhalo! Viz vystup nahore.")
         sys.exit(result.returncode)
 
+    exe_dir = DIST_DIR / "eeg_app"
+
+    # ── Post-build: zkopirovat config/ VEDLE .exe (ne do _internal/) ──
+    # run_app.py pouziva sys.executable.parent jako PROJECT_ROOT v EXE,
+    # takze config/ musi byt primo v dist/eeg_app/.
+    dst_config = exe_dir / "config"
+    if dst_config.exists():
+        shutil.rmtree(dst_config)
+    shutil.copytree(PROJECT_ROOT / "config", dst_config)
+    print(f"  config/ zkopirovan do: {dst_config}")
+
+    # Vytvorit prazdne slozky pro data a modely
+    for folder in ("data/recordings", "models", "logs"):
+        (exe_dir / folder).mkdir(parents=True, exist_ok=True)
+
     print("\nSesteveni dokonceno!")
-    print(f"  EXE: {DIST_DIR / 'eeg_app' / 'eeg_app.exe'}")
+    print(f"  EXE: {exe_dir / 'eeg_app.exe'}")
 
     portable = DIST_DIR / "eeg_app_portable"
     if portable.exists():
         shutil.rmtree(portable)
-    shutil.copytree(DIST_DIR / "eeg_app", portable)
+    shutil.copytree(exe_dir, portable)
     print(f"  Prenosny balik: {portable}")
     print()
     print("Pouziti:")
     print("  Zkopirujte slozku eeg_app_portable na cilovy pocitac")
     print("  Spustte eeg_app.exe (nevyzaduje Python)")
-    print("  config/ slozka je v dist/eeg_app/config/ – lze upravovat")
+    print("  config/ slozka je vedle .exe – lze upravovat")
 
 
 if __name__ == "__main__":

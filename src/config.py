@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -10,7 +11,12 @@ from pydantic import BaseModel, Field, validator
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# V PyInstaller EXE ukazuje __file__ na _internal/ (temp rozbaleni).
+# Projektovy koren (config/, data/, models/) je ve slozce vedle .exe.
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ExperimentConfig(BaseModel):
