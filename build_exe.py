@@ -141,8 +141,8 @@ def build():
         "--hidden-import", "multiprocessing.forkserver",
 
         # ── Vyloučit nepotřebné velké balíky ────────────────────────
+        # POZOR: numpy.testing NESMI byt vylouceno - scikit-learn ho potrebuje!
         "--exclude-module", "matplotlib.tests",
-        "--exclude-module", "numpy.testing",
         "--exclude-module", "pytest",
         "--exclude-module", "sphinx",
         "--exclude-module", "IPython",
