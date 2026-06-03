@@ -589,15 +589,9 @@ Paradigm:
         self._net_listbox.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        ttk.Button(
-            status_frame,
-            text="Pouzit vybrany stream (nastavit jako EEG zdroj)",
-            command=self._on_net_use_selected,
-        ).grid(row=1, column=0, sticky="w", pady=(8, 4))
-
-        # Legenda – pod tlacitkem, aby nezasahovala do terminaloveho vystupu
+        # Legenda – primo pod listboxem uvnitr terminalu
         leg = ttk.Frame(status_frame)
-        leg.grid(row=2, column=0, sticky="w", pady=(0, 2))
+        leg.grid(row=1, column=0, sticky="w", pady=(4, 2))
         tk.Label(leg, text="  [LOCAL]  ", bg="#1e1e1e", fg="#50fa7b",
                  font=("Courier", 8)).pack(side="left")
         tk.Label(leg, text="= primo na tomto pocitaci  ",
@@ -610,6 +604,22 @@ Paradigm:
                  font=("Courier", 8)).pack(side="left")
         tk.Label(leg, text="= otevreny LSL port",
                  font=("Courier", 8)).pack(side="left")
+
+        # Tlacitko VEN z terminalu – v normalnim svetlem panelu
+        btn_outer = ttk.Frame(parent)
+        btn_outer.pack(fill="x", pady=(6, 4))
+        ttk.Button(
+            btn_outer,
+            text="Pouzit vybrany stream jako EEG zdroj",
+            command=self._on_net_use_selected,
+        ).pack(side="left")
+        ttk.Label(
+            btn_outer,
+            text="   (dvojklik na stream ma stejny efekt)",
+            style="Sub.TLabel",
+        ).pack(side="left")
+        # Dvojklik na listbox = stejne jako tlacitko
+        self._net_listbox.bind("<Double-Button-1>", lambda _e: self._on_net_use_selected())
 
         # ── lsl_api.cfg info ─────────────────────────────────────────
         cfg_frame = ttk.LabelFrame(parent, text="lsl_api.cfg", padding=8)
