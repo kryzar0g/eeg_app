@@ -41,6 +41,12 @@ class LSLConfig(BaseModel):
     eeg_stream_type: str = Field("EEG", min_length=1)
     marker_stream_name: str = Field("Markers", min_length=1)
     resolution_timeout: float = Field(10.0, gt=0)
+    # Sit: seznam IP adres EEG zarizeni pro prime pripojeni (cross-subnet)
+    # Prazdny seznam = pouzit LSL multicast (funguje na lokalni siti automaticky)
+    known_peers: list[str] = Field(
+        default_factory=list,
+        description="IP adresy EEG zarizeni pro prime LSL pripojeni pres sit",
+    )
 
 
 class PreprocessingConfig(BaseModel):

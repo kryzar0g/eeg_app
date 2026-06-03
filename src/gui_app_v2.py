@@ -345,10 +345,11 @@ class EegAppGui:
         # Navigation buttons
         self._nav_buttons = {}
         nav_items = [
-            ("info", "ℹ️  Overview"),
-            ("record", "▶️  Record"),
+            ("info",    "ℹ️  Overview"),
+            ("network", "🌐 Network EEG"),
+            ("record",  "▶️  Record"),
             ("offline", "📊 Train Model"),
-            ("online", "🔴 Online BCI"),
+            ("online",  "🔴 Online BCI"),
         ]
         
         for page_id, label in nav_items:
@@ -402,10 +403,11 @@ class EegAppGui:
         
         # Create pages
         self._pages = {
-            "info": self._build_info_page,
-            "record": self._build_record_page,
+            "info":    self._build_info_page,
+            "network": self._build_network_page,
+            "record":  self._build_record_page,
             "offline": self._build_offline_page,
-            "online": self._build_online_page,
+            "online":  self._build_online_page,
         }
         
         # Container for pages
@@ -507,6 +509,181 @@ Paradigm:
                 anchor="w"
             )
     
+    # ── Network EEG page ──────────────────────────────────────────────────────
+
+    def _build_network_page(self, parent: ttk.Frame) -> None:
+        """Stránka pro nastavení síťového EEG streamu přes LSL."""
+        ttk.Label(parent, text="Network EEG – LSL Stream", style="Title.TLabel").pack(
+            anchor="w", pady=(0, 6)
+        )
+        ttk.Label(
+            parent,
+            text=(
+                "EEG zarizeni streamuje data pres LSL (Lab Streaming Layer) po siti.\n"
+                "Na stejne lokalni siti funguje automaticka detekce.\n"
+                "Pro prime IP pripojeni (jina podsit) zadejte IP adresu zarizeni."
+            ),
+            style="Sub.TLabel",
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
+
+        # ── IP nastaveni ──────────────────────────────────────────────
+        ip_frame = ttk.LabelFrame(parent, text="IP adresa EEG zarizeni", padding=10)
+        ip_frame.pack(fill="x", pady=(0, 10))
+        ip_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(ip_frame, text="IP / hostname:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self._net_ip_var = tk.StringVar(
+            value=", ".join(self._config.lsl.known_peers) if self._config else ""
+        )
+        ip_entry = ttk.Entry(ip_frame, textvariable=self._net_ip_var, width=30)
+        ip_entry.grid(row=0, column=1, sticky="ew", pady=2)
+        ttk.Label(
+            ip_frame,
+            text="Priklad: 192.168.1.100   (vice adres oddelit carkou)\n"
+                 "Nechat prazdne = autodetekce na lokalni siti (multicast).",
+            style="Sub.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        btn_row = ttk.Frame(ip_frame)
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Button(btn_row, text="Ulozit a zapsat lsl_api.cfg",
+                   command=self._on_net_save).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Skenovat sit",
+                   command=self._on_net_scan).pack(side="left")
+
+        # ── Status ────────────────────────────────────────────────────
+        status_frame = ttk.LabelFrame(parent, text="Dostupne LSL streamy", padding=10)
+        status_frame.pack(fill="both", expand=True, pady=(0, 10))
+        status_frame.columnconfigure(0, weight=1)
+        status_frame.rowconfigure(1, weight=1)
+
+        self._net_status_var = tk.StringVar(value="Kliknete na 'Skenovat sit' pro hledani EEG streamu.")
+        ttk.Label(status_frame, textvariable=self._net_status_var,
+                  style="Sub.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        # Listbox se streamy
+        list_frame = ttk.Frame(status_frame)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        self._net_listbox = tk.Listbox(
+            list_frame,
+            font=("Courier", 9),
+            height=8,
+            selectmode=tk.SINGLE,
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            selectbackground="#0066cc",
+        )
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical",
+                                  command=self._net_listbox.yview)
+        self._net_listbox.configure(yscrollcommand=scrollbar.set)
+        self._net_listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        ttk.Button(
+            status_frame,
+            text="Pouzit vybrany stream (nastavit jako EEG zdroj)",
+            command=self._on_net_use_selected,
+        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+        # ── lsl_api.cfg info ─────────────────────────────────────────
+        cfg_frame = ttk.LabelFrame(parent, text="lsl_api.cfg", padding=8)
+        cfg_frame.pack(fill="x")
+        self._net_cfg_var = tk.StringVar(value="")
+        self._net_cfg_label = ttk.Label(cfg_frame, textvariable=self._net_cfg_var,
+                                        style="Info.TLabel", justify="left")
+        self._net_cfg_label.pack(anchor="w")
+        self._update_cfg_label()
+
+    def _update_cfg_label(self) -> None:
+        from .lsl_network import get_lsl_cfg_path, read_known_peers
+        cfg = get_lsl_cfg_path()
+        if cfg:
+            peers = read_known_peers()
+            self._net_cfg_var.set(
+                f"Soubor: {cfg}\n"
+                f"KnownPeers: {peers if peers else '(zadne – autodetekce)'}"
+            )
+        else:
+            self._net_cfg_var.set("lsl_api.cfg nenalezen – pouziva se multicast autodetekce.")
+
+    def _on_net_save(self) -> None:
+        """Ulozi IP adresy do lsl_api.cfg."""
+        from .lsl_network import configure_network
+        raw = self._net_ip_var.get().strip()
+        peers = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()] if raw else []
+        path = configure_network(known_peers=peers)
+        self._net_status_var.set(f"Ulozeno: {path}")
+        self._update_cfg_label()
+        # Aktualizovat config v pameti
+        if self._config and peers != self._config.lsl.known_peers:
+            self._config.lsl.known_peers = peers
+
+    def _on_net_scan(self) -> None:
+        """Spusti skenovani LSL streamu na siti (v pozadi)."""
+        self._net_status_var.set("Skenuju sit... (az 5 sekund)")
+        self._net_listbox.delete(0, tk.END)
+        self._net_listbox.insert(tk.END, "  hledam streamy...")
+
+        def _scan() -> None:
+            from .lsl_network import scan_streams
+            results = scan_streams(timeout=5.0)
+            def _update() -> None:
+                self._net_listbox.delete(0, tk.END)
+                if not results:
+                    self._net_status_var.set(
+                        "Zadne LSL streamy nenalezeny. Zkontrolujte:\n"
+                        "  • Je EEG zarizeni zapnuto a pripojeno ke stejne siti?\n"
+                        "  • Je firewall nastaven pro LSL (port 16571-16604)?\n"
+                        "  • Pro jinou podsit zadejte IP adresu vyse."
+                    )
+                    self._net_listbox.insert(tk.END, "  (zadne streamy)")
+                else:
+                    self._net_status_var.set(
+                        f"Nalezeno {len(results)} streamu. "
+                        "Vyberte EEG stream a kliknete 'Pouzit vybrany stream'."
+                    )
+                    for s in results:
+                        icon = "EEG" if s.stream_type.upper() == "EEG" else "   "
+                        self._net_listbox.insert(
+                            tk.END,
+                            f"[{icon}] {s.name}  {s.channels}ch@{s.sfreq:.0f}Hz  {s.hostname}"
+                        )
+                    # Oznacit prvni EEG stream
+                    for i, s in enumerate(results):
+                        if s.stream_type.upper() == "EEG":
+                            self._net_listbox.selection_set(i)
+                            break
+                # Ulozit vysledky pro _on_net_use_selected
+                self._net_scan_results = results
+            self._root.after(0, _update)
+
+        self._net_scan_results = []
+        import threading
+        threading.Thread(target=_scan, daemon=True).start()
+
+    def _on_net_use_selected(self) -> None:
+        """Nastavi vybrany stream jako EEG zdroj v konfiguraci."""
+        results = getattr(self, "_net_scan_results", [])
+        sel = self._net_listbox.curselection()
+        if not sel or not results:
+            return
+        idx = sel[0]
+        if idx >= len(results):
+            return
+        stream = results[idx]
+        if self._config:
+            self._config.lsl.eeg_stream_name = stream.name
+            self._config.lsl.eeg_stream_type = stream.stream_type
+        self._net_status_var.set(
+            f"Nastaveno: {stream.name} [{stream.stream_type}] "
+            f"{stream.channels}ch @ {stream.sfreq:.0f}Hz  (host: {stream.hostname})\n"
+            f"Toto nastaveni plati pro tuto session. Pro trvale ulozeni upravte config.yaml."
+        )
+
     def _build_record_page(self, parent: ttk.Frame) -> None:
         """Build the record paradigm page."""
         ttk.Label(parent, text="▶️  Record Motor Imagery Session", style="Title.TLabel").pack(
