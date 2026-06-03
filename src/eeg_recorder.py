@@ -137,7 +137,7 @@ class EegRecorder:
             logger.warning("EegRecorder: žádná data k uložení")
             return None
 
-        return self._save_fif(patient_name)
+        return self._save_edf(patient_name)
 
     # ─── Vlákna ───────────────────────────────────────────────────────────────
 
@@ -172,58 +172,88 @@ class EegRecorder:
 
     # ─── Ukládání ─────────────────────────────────────────────────────────────
 
-    def _save_fif(self, patient_name: str) -> Optional[Path]:
-        """Sestaví MNE Raw objekt a uloží jako .fif + záložní .markers.csv."""
+    def _build_raw(self) -> "mne.io.RawArray":
+        """Sestaví MNE RawArray z nahraných dat včetně anotací markerů."""
+        import mne
+
+        all_data = np.vstack(self._data_chunks)  # (n_samples, n_channels)
+        data_t = all_data.T  # MNE: (n_channels, n_samples)
+
+        info = mne.create_info(
+            ch_names=self._ch_names,
+            sfreq=self._sfreq,
+            ch_types="eeg",
+        )
+        raw = mne.io.RawArray(data_t, info, verbose="ERROR")
+
+        # Vložit markery jako EDF+ anotace
+        if self._marker_events and self._first_timestamp is not None:
+            onsets = [
+                max(0.0, ts - self._first_timestamp)
+                for ts, _ in self._marker_events
+            ]
+            durations = [float(self.config.experiment.imagery_duration)] * len(self._marker_events)
+            descriptions = [code for _, code in self._marker_events]
+            raw.set_annotations(mne.Annotations(
+                onset=onsets,
+                duration=durations,
+                description=descriptions,
+            ))
+            logger.info(
+                f"EegRecorder: vloženo {len(self._marker_events)} markerů jako anotace"
+            )
+        return raw
+
+    def _save_edf(self, patient_name: str) -> Optional[Path]:
+        """Uloží záznam jako EDF soubor s EDF+ anotacemi.
+
+        EDF je primární formát aplikace (načítá offline_analysis.py).
+        Pokud export selže (chybí edfio), uloží jako záložní FIF.
+        """
+        import mne
+
+        raw = self._build_raw()
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = "".join(
+            c if c.isalnum() or c in "_-" else "_" for c in patient_name
+        )
+
+        # ── Primární: EDF ────────────────────────────────────────────
+        fname_edf = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.edf"
         try:
-            import mne
-
-            all_data = np.vstack(self._data_chunks)  # (n_samples, n_channels)
-            data_t = all_data.T  # MNE: (n_channels, n_samples)
-
-            info = mne.create_info(
-                ch_names=self._ch_names,
-                sfreq=self._sfreq,
-                ch_types="eeg",
+            mne.export.export_raw(
+                str(fname_edf),
+                raw,
+                fmt="edf",
+                overwrite=True,
+                verbose="ERROR",
             )
-            raw = mne.io.RawArray(data_t, info, verbose="ERROR")
+            self.saved_path = fname_edf
+            logger.info(f"EegRecorder: uloženo jako EDF → {fname_edf}")
+            self._save_markers_csv(fname_edf)
+            return fname_edf
 
-            # Vložit markery jako anotace
-            if self._marker_events and self._first_timestamp is not None:
-                onsets = [
-                    max(0.0, ts - self._first_timestamp)
-                    for ts, _ in self._marker_events
-                ]
-                durations = [float(self.config.experiment.imagery_duration)] * len(self._marker_events)
-                descriptions = [code for _, code in self._marker_events]
-                annotations = mne.Annotations(
-                    onset=onsets,
-                    duration=durations,
-                    description=descriptions,
-                )
-                raw.set_annotations(annotations)
-                logger.info(
-                    f"EegRecorder: vloženo {len(self._marker_events)} markerů jako anotace"
-                )
-
-            # Sestavit název souboru
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = "".join(
-                c if c.isalnum() or c in "_-" else "_" for c in patient_name
+        except Exception as edf_exc:
+            logger.warning(
+                f"EegRecorder: EDF export selhal ({edf_exc}). "
+                "Zálohuji do FIF. Nainstalujte 'edfio' pro EDF podporu: "
+                "pip install edfio"
             )
-            fname = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.fif"
 
-            raw.save(str(fname), overwrite=True, verbose="ERROR")
-            self.saved_path = fname
-            logger.info(f"EegRecorder: uloženo → {fname}")
-
-            # Záložní CSV s markery (start;end;label) pro mode=csv trénování
-            self._save_markers_csv(fname)
-
-            return fname
-
-        except Exception as exc:
-            logger.error(f"EegRecorder: chyba při ukládání: {exc}", exc_info=True)
+        # ── Záloha: FIF ──────────────────────────────────────────────
+        fname_fif = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.fif"
+        try:
+            raw.save(str(fname_fif), overwrite=True, verbose="ERROR")
+            self.saved_path = fname_fif
+            logger.info(f"EegRecorder: uloženo jako FIF záloha → {fname_fif}")
+            self._save_markers_csv(fname_fif)
+            return fname_fif
+        except Exception as fif_exc:
+            logger.error(f"EegRecorder: i FIF záloha selhala: {fif_exc}", exc_info=True)
             return None
+
+    # Zpětná kompatibilita — old name
+    _save_fif = _save_edf
 
     def _save_markers_csv(self, eeg_path: Path) -> None:
         """Uloží markery jako CSV kompatibilní s mode='csv' v offline_analysis."""

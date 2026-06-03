@@ -217,19 +217,31 @@ def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> 
 def _prepare_epochs(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
   mode = str(config.events.get("mode", "stim")).lower()
 
-  # FIF soubory z interního EegRecorderu mají anotace → vždy použít annotations mode
-  filenames = getattr(raw, "filenames", [])
-  is_fif = bool(filenames) and any(str(f).lower().endswith(".fif") for f in filenames)
-  if is_fif and hasattr(raw, "annotations") and len(raw.annotations) > 0:
-    logger.info(
-      "FIF soubor s MNE anotacemi – automaticky přepínám na mode 'annotations'"
-    )
-    return _prepare_epochs_from_annotations(raw, config)
-
+  # Explicitní mode vždy respektujeme
   if mode == "annotations":
     return _prepare_epochs_from_annotations(raw, config)
   if mode == "csv":
     return _prepare_epochs_from_csv(raw, config)
+
+  # Auto-detekce pro soubory z interního EegRecorderu:
+  # EDF/BDF/FIF s MNE anotacemi a bez STI kanálu → annotations mode.
+  # Tím se automaticky načtou soubory uložené EegRecorderem bez nutnosti
+  # měnit config.yaml.
+  filenames = getattr(raw, "filenames", [])
+  is_recorder_format = bool(filenames) and any(
+    str(f).lower().endswith((".edf", ".bdf", ".fif")) for f in filenames
+  )
+  stim_channel = config.events.get("stim_channel", "STI 014")
+  has_stim_ch = stim_channel in raw.info.get("ch_names", [])
+  has_annotations = hasattr(raw, "annotations") and len(raw.annotations) > 0
+
+  if is_recorder_format and has_annotations and not has_stim_ch and mode == "stim":
+    logger.info(
+      "Soubor obsahuje MNE anotace a nemá STI kanál "
+      "– automaticky přepínám na mode 'annotations'"
+    )
+    return _prepare_epochs_from_annotations(raw, config)
+
   return _prepare_epochs_from_stim(raw, config)
 
 
