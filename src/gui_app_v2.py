@@ -33,6 +33,9 @@ class GuiSelection:
     offline_file: Optional[str] = None
     patient_profile_id: Optional[str] = None
     patient_profile_name: Optional[str] = None
+    # In-memory config z GUI – obsahuje zmeny z Network EEG zalozky
+    # (napr. vybrany stream). Pokud None, pouzije se load_config() ze souboru.
+    config: Optional[object] = None
 
 
 def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
@@ -999,6 +1002,7 @@ Paradigm:
             mode="record",
             patient_profile_id=self._patient_profile.profile_id,
             patient_profile_name=self._patient_profile.display_name,
+            config=self._config,   # predat in-memory config se zmenami z Network EEG
         )
         self._start_task(selection)
 
@@ -1148,17 +1152,19 @@ Paradigm:
 def _run_selection(selection: GuiSelection) -> None:
     """Execute the selected mode (runs in background thread)."""
     if selection.mode == "record":
-        # PsychoPy/pyglet must run in the main thread of a process. Spawn a separate
-        # process for the paradigm so its event loop runs in that process's main thread.
-        #
-        # Interní EEG recorder běží v tomto vlákně – nahrává EEG z LSL a ukládá FIF.
-        # Pokud LSL není dostupné (žádné EEG zařízení), recorder tiše přeskočí
-        # a zobrazení paradigmatu proběhne normálně.
         from .config import load_config as _load
         from .eeg_recorder import EegRecorder
 
-        cfg = _load()
+        # Pouzit in-memory config z GUI (obsahuje vybrany stream ze zalozky
+        # Network EEG). Pokud neni k dispozici, nacist ze souboru.
+        cfg = selection.config if selection.config is not None else _load()
         patient_name = selection.patient_profile_name or "unknown"
+
+        print(
+            f"EEG stream: typ='{cfg.lsl.eeg_stream_type}' "
+            f"jmeno='{cfg.lsl.eeg_stream_name}' "
+            f"timeout={cfg.lsl.resolution_timeout}s"
+        )
 
         recorder = EegRecorder(cfg)
         recorder.start()
@@ -1172,15 +1178,17 @@ def _run_selection(selection: GuiSelection) -> None:
 
         saved_path = recorder.stop(patient_name=patient_name)
         if saved_path:
-            print(f"\n💾 EEG záznam uložen: {saved_path}")
-            print(
-                "   Pro trénování: Train Model → vyberte tento soubor\n"
-                "   (FIF formát – kompatibilní s offline analýzou)"
-            )
+            print(f"\nEEG zaznam ulozen: {saved_path}")
+            print("   Pro trenovani: Train Model -> vyberte tento soubor")
         else:
             print(
-                "\n⚠️  Interní nahrávání nebylo dostupné (žádný LSL stream).\n"
-                "   Pokud jste používali LabRecorder, soubor najdete v jeho výstupní složce."
+                "\nVAROVANI: Interni nahravani nebylo dostupne (zadny LSL stream).\n"
+                "   Overeni:\n"
+                "   1. Je LSL software na EEG pocitaci spusten?\n"
+                "   2. Zalozka Network EEG -> Skenovat sit -> stream musi byt videt\n"
+                "   3. Po vybrani streamu v Network EEG kliknete 'Pouzit vybrany stream'\n"
+                "   4. Teprve pak spustte Record\n"
+                f"   Hledany stream: typ='{cfg.lsl.eeg_stream_type}' jmeno='{cfg.lsl.eeg_stream_name}'"
             )
 
     elif selection.mode == "offline":

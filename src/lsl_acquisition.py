@@ -52,37 +52,57 @@ def resolve_eeg_stream(config: AppConfig, timeout: Optional[float] = None) -> St
     
     eeg_name = config.lsl.eeg_stream_name
     eeg_type = config.lsl.eeg_stream_type
-    
-    logger.info(f"Searching for LSL stream (type={eeg_type}, timeout={timeout}s)...")
-    
+
+    logger.info(f"Searching for LSL stream (type={eeg_type}, name={eeg_name}, timeout={timeout}s)...")
+
+    # Pokus 1: hledat podle typu (napr. "EEG")
+    streams = []
     try:
         streams = resolve_byprop("type", eeg_type, timeout=timeout)
     except Exception as e:
-        raise RuntimeError(f"LSL stream resolution failed: {e}") from e
-    
+        logger.warning(f"LSL resolve by type failed: {e}")
+
+    # Pokus 2: pokud nenasel nic a mame konkretni jmeno, hledat podle jmena
+    if not streams and eeg_name and eeg_name != eeg_type:
+        logger.info(f"Type search empty, trying by name='{eeg_name}'...")
+        try:
+            streams = resolve_byprop("name", eeg_name, timeout=timeout)
+        except Exception as e:
+            logger.warning(f"LSL resolve by name failed: {e}")
+
+    # Pokus 3: najit jakykoli stream (posledni moznost)
+    if not streams:
+        logger.info("Name search empty, trying any stream...")
+        try:
+            from pylsl import resolve_streams
+            streams = resolve_streams(wait_time=min(timeout, 3.0))
+        except Exception:
+            pass
+
     if not streams:
         raise RuntimeError(
-            f"No LSL stream found with type '{eeg_type}' within {timeout}s. "
-            "Ensure LabRecorder or another LSL provider is running."
+            f"No LSL stream found (type='{eeg_type}', name='{eeg_name}') within {timeout}s.\n"
+            "Steps to fix:\n"
+            "  1. Make sure LSL software is running on the EEG computer\n"
+            "  2. Use Network EEG tab -> Scan -> select your stream -> 'Use selected'\n"
+            "  3. Then start recording"
         )
-    
-    # Try to match by name
+
+    # Vybrat spravny stream: prednostne podle jmena, pak prvni nalezeny
+    info = None
     if eeg_name:
         named = [s for s in streams if s.name() == eeg_name]
         if named:
             info = named[0]
-            logger.info(f"Connected to '{eeg_name}' stream")
-        else:
-            info = streams[0]
-            logger.warning(
-                f"Stream '{eeg_name}' not found. Using first available: '{info.name()}'"
-            )
-    else:
-        info = streams[0]
-        logger.info(f"Connected to stream: '{info.name()}'")
-    
+            logger.info(f"Connected to stream by name: '{eeg_name}'")
+    if info is None:
+        # Prednostne EEG typ
+        eeg_typed = [s for s in streams if s.type().upper() == "EEG"]
+        info = eeg_typed[0] if eeg_typed else streams[0]
+        logger.info(f"Connected to stream: '{info.name()}' (type={info.type()})")
+
     inlet = StreamInlet(info, max_chunklen=0)
-    logger.debug(f"EEG stream: {info.channel_count()} channels @ {info.nominal_srate()} Hz")
+    logger.info(f"EEG stream ready: {info.channel_count()} channels @ {info.nominal_srate()} Hz  host={info.hostname()}")
     return inlet
 
 
