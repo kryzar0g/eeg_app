@@ -217,32 +217,87 @@ def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> 
 def _prepare_epochs(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
   mode = str(config.events.get("mode", "stim")).lower()
 
-  # Explicitní mode vždy respektujeme
+  # ── Auto-detekce výstupu interního EegRecorderu ────────────────────
+  # Recorder vždy produkuje BDF se Status kanálem nebo EDF/FIF s MNE
+  # anotacemi. Tato detekce má přednost před nastaveným mode, protože
+  # je jednoznačná (žádný jiný zdroj neprodukuje "Status" kanál bez STI).
+  filenames    = getattr(raw, "filenames", [])
+  is_our_file  = bool(filenames) and any(
+    str(f).lower().endswith((".edf", ".bdf", ".fif")) for f in filenames
+  )
+  ch_names        = raw.info.get("ch_names", [])
+  has_status_ch   = "Status" in ch_names
+  has_annotations = hasattr(raw, "annotations") and len(raw.annotations) > 0
+  stim_channel    = config.events.get("stim_channel", "STI 014")
+  has_stim_ch     = stim_channel in ch_names
+
+  if is_our_file and has_status_ch and not has_stim_ch:
+    # BDF z EegRecorderu: markery v Status kanálu
+    logger.info("BDF z interního EegRecorderu – čtu markery ze Status kanálu")
+    return _prepare_epochs_from_status(raw, config)
+
+  if is_our_file and has_annotations and not has_stim_ch:
+    # EDF+ nebo FIF z EegRecorderu: markery jako MNE anotace
+    logger.info("EDF/FIF z interního EegRecorderu – čtu markery z MNE anotací")
+    return _prepare_epochs_from_annotations(raw, config)
+
+  # ── Explicitní mode z config.yaml ───────────────────────────────────
   if mode == "annotations":
     return _prepare_epochs_from_annotations(raw, config)
   if mode == "csv":
     return _prepare_epochs_from_csv(raw, config)
-
-  # Auto-detekce pro soubory z interního EegRecorderu:
-  # EDF/BDF/FIF s MNE anotacemi a bez STI kanálu → annotations mode.
-  # Tím se automaticky načtou soubory uložené EegRecorderem bez nutnosti
-  # měnit config.yaml.
-  filenames = getattr(raw, "filenames", [])
-  is_recorder_format = bool(filenames) and any(
-    str(f).lower().endswith((".edf", ".bdf", ".fif")) for f in filenames
-  )
-  stim_channel = config.events.get("stim_channel", "STI 014")
-  has_stim_ch = stim_channel in raw.info.get("ch_names", [])
-  has_annotations = hasattr(raw, "annotations") and len(raw.annotations) > 0
-
-  if is_recorder_format and has_annotations and not has_stim_ch and mode == "stim":
-    logger.info(
-      "Soubor obsahuje MNE anotace a nemá STI kanál "
-      "– automaticky přepínám na mode 'annotations'"
-    )
-    return _prepare_epochs_from_annotations(raw, config)
-
   return _prepare_epochs_from_stim(raw, config)
+
+
+def _prepare_epochs_from_status(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
+  """Epochování z BDF Status kanálu (výstup interního EegRecorderu).
+
+  Status kanál obsahuje integer kódy tříd vložené na začátku každého stimulu.
+  Funkce najde nenulové hodnoty, interpretuje je jako event kódy a epochuje.
+  """
+  events_cfg = config.events
+  tmin = float(events_cfg.get("tmin", 0.0))
+  tmax_cfg = events_cfg.get("tmax", None)
+  tmax = float(tmax_cfg) if tmax_cfg is not None else float(config.experiment.imagery_duration)
+
+  try:
+    events = mne.find_events(raw, stim_channel="Status", shortest_event=1, verbose="ERROR")
+  except Exception as e:
+    raise RuntimeError(f"Nepodařilo se načíst markery ze Status kanálu: {e}") from e
+
+  if events.size == 0:
+    raise RuntimeError(
+      "BDF Status kanál neobsahuje žádné markery. "
+      "Zkontrolujte, zda byl záznam pořízen interním EegRecorderem."
+    )
+
+  # Sestavit event_id: kódy z paradigmatu nebo ze všech nalezených událostí
+  class_map = config.paradigm.get("classes", {})
+  if class_map:
+    event_id = {str(label): int(code) for label, code in class_map.items()}
+    # Filtrovat události na platné kódy
+    valid_codes = set(event_id.values())
+    events = events[np.isin(events[:, 2], list(valid_codes))]
+    if events.size == 0:
+      raise RuntimeError("Status kanál neobsahuje události odpovídající třídám v config.yaml")
+  else:
+    unique_codes = np.unique(events[:, 2])
+    event_id = {str(c): int(c) for c in unique_codes}
+
+  logger.info(f"Status kanál: nalezeno {len(events)} událostí, třídy: {event_id}")
+
+  epochs = mne.Epochs(
+    raw.copy().pick("eeg"),
+    events,
+    event_id=event_id,
+    tmin=tmin,
+    tmax=tmax,
+    baseline=None,
+    preload=True,
+    verbose="ERROR",
+  )
+  logger.info(f"Vytvořeno {len(epochs)} epoch z BDF Status kanálu")
+  return epochs
 
 
 def _average_epochs(
