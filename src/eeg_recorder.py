@@ -306,10 +306,26 @@ class EegRecorder:
                     except (ValueError, OverflowError):
                         pass
 
-        # Fyzikální rozsah EEG (µV → pro BDF int24 rozsah ±8 388 607)
-        # Použijeme jednotky µV s rozsahem ±32 mV (typické EEG)
-        phys_min = -32768.0
-        phys_max =  32767.0
+        # ── Detekce jednotek LSL streamu ─────────────────────────────
+        # LSL EEG zařízení posílají data typicky v µV (hodnoty ~1–200).
+        # Pokud jsou hodnoty velmi malé (<0.01), jsou pravděpodobně ve V
+        # a je třeba je převést na µV. Tato auto-detekce zabraňuje
+        # saturaci signálu (clipping) při zápisu do BDF.
+        data_abs_max = float(np.abs(all_data).max()) if all_data.size > 0 else 1.0
+
+        if data_abs_max < 0.1:
+            # Data jsou ve Voltech (SI) → převést na µV
+            eeg_uv_data = all_data * 1e6
+            logger.info("EegRecorder BDF: data detekována v V → převod na µV (×1e6)")
+        else:
+            # Data jsou již v µV (typické pro LSL EEG streamy)
+            eeg_uv_data = all_data.copy()
+            logger.info(f"EegRecorder BDF: data v µV, max={data_abs_max:.1f} µV")
+
+        # Fyzikální rozsah: nastav dynamicky podle skutečných dat + 20% rezerva
+        p_abs = max(float(np.abs(eeg_uv_data).max()) * 1.2, 500.0)
+        phys_min = -p_abs
+        phys_max =  p_abs
         digi_min = -8388608
         digi_max =  8388607
         gain = (phys_max - phys_min) / (digi_max - digi_min)  # µV/digit
@@ -387,16 +403,12 @@ class EegRecorder:
             f"Hlavicka: ocekavano {n_header_bytes} B, got {len(hdr)} B"
 
         # ── Datové záznamy ───────────────────────────────────────────
-        # Převod EEG: float (V) → int24
-        # MNE ukládá v V, EEG bývá v µV → násobit 1e6
-        eeg_uv = all_data * 1e6  # (n_samples_total+pad, n_eeg)
-
         def _float_to_int24(arr_uv: np.ndarray) -> np.ndarray:
             """µV float → int24 (ořezáno na ±8 388 607)."""
             digital = np.round(arr_uv / gain).astype(np.int64)
             return np.clip(digital, digi_min, digi_max).astype(np.int32)
 
-        eeg_digital = _float_to_int24(eeg_uv)  # (total_samples, n_eeg)
+        eeg_digital = _float_to_int24(eeg_uv_data)  # (total_samples, n_eeg)
 
         with path.open("wb") as f:
             f.write(bytes(hdr))
