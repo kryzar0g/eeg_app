@@ -89,31 +89,28 @@ class EegRecorder:
             ch_node = ch_node.next_sibling()
         self._ch_names = names
 
-        # Volitelně: připojit se k marker streamu
-        try:
-            from pylsl import resolve_byprop, StreamInlet
-            marker_streams = resolve_byprop("type", "Markers", timeout=2.0)
-            if marker_streams:
-                self._marker_inlet = StreamInlet(marker_streams[0])
-                logger.info("EegRecorder: připojen k marker streamu")
-        except Exception as exc:
-            logger.debug(f"EegRecorder: marker stream nedostupný ({exc})")
-
         self._running = True
         self.available = True
 
-        self._eeg_thread = threading.Thread(target=self._eeg_loop, daemon=True, name="eeg-recorder-eeg")
+        # EEG akvisice – spustit hned
+        self._eeg_thread = threading.Thread(
+            target=self._eeg_loop, daemon=True, name="eeg-recorder-eeg"
+        )
         self._eeg_thread.start()
 
-        if self._marker_inlet is not None:
-            self._marker_thread = threading.Thread(
-                target=self._marker_loop, daemon=True, name="eeg-recorder-markers"
-            )
-            self._marker_thread.start()
+        # Marker stream – spustit retry vlakno.
+        # Paradigma (marker outlet) se spusti AZ po recorder.start(),
+        # proto retry smycka hleda stream opakovane az 60 sekund.
+        self._marker_thread = threading.Thread(
+            target=self._marker_connect_and_loop,
+            daemon=True,
+            name="eeg-recorder-markers",
+        )
+        self._marker_thread.start()
 
         logger.info(
-            f"EegRecorder: nahrávání spuštěno ({n_ch} kanálů @ {self._sfreq:.0f} Hz, "
-            f"výstup: {self.output_dir})"
+            "EegRecorder: nahravani spusteno (%d kanalu @ %.0f Hz, vystup: %s)",
+            n_ch, self._sfreq, self.output_dir,
         )
 
     def stop(self, patient_name: str = "pacient") -> Optional[Path]:
@@ -156,19 +153,48 @@ class EegRecorder:
 
         logger.debug("EegRecorder: EEG smyčka ukončena")
 
+    def _marker_connect_and_loop(self) -> None:
+        """Hledá marker LSL stream a po nalezení přijímá markery.
+
+        Retry smyčka: paradigma (marker outlet) se spouští až po start(),
+        proto zkouší každou sekundu až 60 sekund.
+        """
+        from pylsl import resolve_byprop, StreamInlet
+
+        deadline = time.time() + 60.0
+        inlet = None
+
+        while self._running and time.time() < deadline:
+            try:
+                streams = resolve_byprop("type", "Markers", timeout=1.0)
+                if streams:
+                    inlet = StreamInlet(streams[0])
+                    logger.info("EegRecorder: marker stream nalezen a pripojen")
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if inlet is None:
+            logger.warning("EegRecorder: marker stream nenalezen do 60s - BDF nebude mit markery")
+            return
+
+        self._marker_inlet = inlet
+        self._marker_loop()
+
     def _marker_loop(self) -> None:
-        """Smyčka příjmu markerů (běží v separátním vlákně)."""
+        """Přijímá markery z LSL (volá se po nalezení streamu)."""
         while self._running:
             try:
                 sample, timestamp = self._marker_inlet.pull_sample(timeout=0.1)
                 if sample and timestamp is not None:
                     marker_code = str(sample[0])
                     self._marker_events.append((float(timestamp), marker_code))
-                    logger.debug(f"EegRecorder: marker {marker_code!r} @ t={timestamp:.3f}")
+                    logger.debug("EegRecorder: marker %r @ t=%.3f", marker_code, timestamp)
             except Exception as exc:
-                logger.debug(f"EegRecorder: chyba čtení markeru: {exc}")
+                logger.debug("EegRecorder: chyba cteni markeru: %s", exc)
 
-        logger.debug("EegRecorder: marker smyčka ukončena")
+        logger.debug("EegRecorder: marker smycka ukoncena")
 
     # ─── Ukládání ─────────────────────────────────────────────────────────────
 

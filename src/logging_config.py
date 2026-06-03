@@ -1,5 +1,7 @@
+import io
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 import os
 
@@ -40,8 +42,16 @@ def setup_logging(log_dir: str | Path = "logs", level: str = "INFO") -> Path:
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
     
-    # Console handler
-    console_handler = logging.StreamHandler()
+    # Console handler – UTF-8 s fallbackem na '?' pro znaky mimo cp1252
+    try:
+        utf8_stream = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+        )
+        console_handler = logging.StreamHandler(stream=utf8_stream)
+    except AttributeError:
+        # stdout nema .buffer (napr. IDLE, redirected) – pouzit errors=replace
+        console_handler = logging.StreamHandler()
+        console_handler.stream.errors = "replace"  # type: ignore[attr-defined]
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     

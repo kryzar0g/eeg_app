@@ -212,7 +212,7 @@ def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> 
     picks="eeg",
     verbose="ERROR",
   )
-  logger.info(f"Vytvořeno {len(epochs)} epoch z anotací")
+  logger.info(f"Vytvoreno {len(epochs)} epoch z anotaci")
   return epochs
 
 
@@ -235,12 +235,12 @@ def _prepare_epochs(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
 
   if is_our_file and has_status_ch and not has_stim_ch:
     # BDF z EegRecorderu: markery v Status kanálu
-    logger.info("BDF z interního EegRecorderu – čtu markery ze Status kanálu")
+    logger.info("BDF z EegRecorderu - ctu markery ze Status kanalu")
     return _prepare_epochs_from_status(raw, config)
 
   if is_our_file and has_annotations and not has_stim_ch:
     # EDF+ nebo FIF z EegRecorderu: markery jako MNE anotace
-    logger.info("EDF/FIF z interního EegRecorderu – čtu markery z MNE anotací")
+    logger.info("EDF/FIF z EegRecorderu - ctu markery z MNE anotaci")
     return _prepare_epochs_from_annotations(raw, config)
 
   # ── Explicitní mode z config.yaml ───────────────────────────────────
