@@ -990,12 +990,47 @@ Paradigm:
             return
         if not self._record_instructions():
             return
+
+        # Kontrola LSL streamu pred zahajenim zaznamu
+        if not self._check_lsl_stream_before_record():
+            return
+
         selection = GuiSelection(
             mode="record",
             patient_profile_id=self._patient_profile.profile_id,
             patient_profile_name=self._patient_profile.display_name,
         )
         self._start_task(selection)
+
+    def _check_lsl_stream_before_record(self) -> bool:
+        """Rychla kontrola LSL streamu pred zahajenim. Vraci True = pokracovat."""
+        try:
+            from .lsl_network import scan_streams
+            streams = scan_streams(timeout=3.0, stream_type="EEG")
+        except Exception:
+            streams = []
+
+        if streams:
+            # Stream nalezen - vse OK, jen zobrazit info
+            s = streams[0]
+            source = "LOCAL" if s.is_local else f"NETWORK ({s.hostname})"
+            logger.info("LSL EEG stream nalezen: %s [%s]", s.name, source)
+            return True
+
+        # Stream nenalezen - zeptat se uzivatele
+        answer = messagebox.askyesno(
+            "LSL EEG stream nenalezen",
+            "Zadny LSL EEG stream nebyl nalezen na siti.\n\n"
+            "Mozne priciny:\n"
+            "  • EEG zarizeni neni zapnuto\n"
+            "  • LSL software na druhem PC neni spusten\n"
+            "  • Firewall blokuje port 16571\n"
+            "  • IP adresa neni nastavena (zkuste zalozku Network EEG)\n\n"
+            "Chcete pokracovat i bez EEG streamu?\n"
+            "(Paradigma se spusti, ale EEG data se nenahraji)",
+            icon="warning",
+        )
+        return answer
     
     def _on_start_offline(self) -> None:
         """Start offline training mode."""

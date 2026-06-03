@@ -19,11 +19,29 @@ from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Umisteni lsl_api.cfg – vedle EXE nebo v projektu
-_CFG_CANDIDATES = [
-    Path.cwd() / "lsl_api.cfg",
-    Path(__file__).resolve().parents[1] / "lsl_api.cfg",
-]
+# Umisteni lsl_api.cfg – liblsl prohledava tato mista (v poradi priority):
+# 1. %LOCALAPPDATA%\labstreaminglayer\liblsl\  (Windows – nejvyssi priorita)
+# 2. ~/.config/labstreaminglayer/liblsl/        (Linux/Mac)
+# 3. Adresar EXE / projekt
+import os as _os, sys as _sys
+
+def _lsl_cfg_paths() -> list:
+    paths = []
+    # Windows: %LOCALAPPDATA%\labstreaminglayer\liblsl\lsl_api.cfg
+    local_app = _os.environ.get("LOCALAPPDATA", "")
+    if local_app:
+        paths.append(Path(local_app) / "labstreaminglayer" / "liblsl" / "lsl_api.cfg")
+    # Linux/Mac: ~/.config/labstreaminglayer/liblsl/lsl_api.cfg
+    paths.append(Path.home() / ".config" / "labstreaminglayer" / "liblsl" / "lsl_api.cfg")
+    # Projekt / EXE adresar
+    if getattr(_sys, "frozen", False):
+        paths.append(Path(_sys.executable).parent / "lsl_api.cfg")
+    else:
+        paths.append(Path(__file__).resolve().parents[1] / "lsl_api.cfg")
+    paths.append(Path.cwd() / "lsl_api.cfg")
+    return paths
+
+_CFG_CANDIDATES = _lsl_cfg_paths()
 
 
 def _local_hostnames() -> set:
@@ -341,47 +359,54 @@ def configure_network(
 ) -> Path:
     """Vygeneruje lsl_api.cfg pro síťové připojení k EEG zařízení.
 
+    Zapíše soubor do VŠECH míst kde liblsl hledá konfiguraci:
+      - %LOCALAPPDATA%\\labstreaminglayer\\liblsl\\lsl_api.cfg  (Windows – nejvyšší priorita)
+      - ~/.config/labstreaminglayer/liblsl/lsl_api.cfg           (Linux/Mac)
+      - projektový adresář
+
     Použití pro přímé IP připojení (cross-subnet, bez multicastu):
         configure_network(known_peers=["192.168.1.100"])
-
-    Args:
-        known_peers:    Seznam IP adres EEG zařízení.
-        multicast_port: Port pro LSL multicast (default 16571).
-        base_port:      Základní port pro datové přenosy (default 16572).
-        ipv6:           Povolit IPv6.
-        output_path:    Kde uložit cfg soubor (default: vedle projektu).
-
-    Returns:
-        Cesta k uloženému cfg souboru.
     """
-    if output_path is None:
-        output_path = _CFG_CANDIDATES[0]
-
     peers_str = ""
     if known_peers:
         sanitized = [p.strip() for p in known_peers if p.strip()]
         if sanitized:
             peers_str = "{" + ", ".join(sanitized) + "}"
 
-    cfg_content = f"""; lsl_api.cfg – automaticky vygenerováno aplikací EEG BCI
-; Editujte pro nastavení síťového streamování EEG.
+    cfg_content = (
+        "; lsl_api.cfg – automaticky vygenerovano aplikaci EEG BCI\n"
+        "; Editujte pro nastaveni sitoveho streamovani EEG.\n"
+        "\n"
+        "[multicast]\n"
+        "; IP adresy EEG zarizeni pro prime pripojeni (cross-subnet)\n"
+        f"KnownPeers = {peers_str}\n"
+        f"MulticastPort = {multicast_port}\n"
+        f"IPv6 = {'allow' if ipv6 else 'disable'}\n"
+        "\n"
+        "[ports]\n"
+        f"BasePort = {base_port}\n"
+        "PortRange = 32\n"
+    )
 
-[multicast]
-; Pridat IP adresy EEG zarizeni pro prime pripojeni (cross-subnet)
-KnownPeers = {peers_str}
-MulticastPort = {multicast_port}
-IPv6 = {"allow" if ipv6 else "disable"}
+    # Zapsat do vsech umisteni kde liblsl hleda konfiguraci
+    written: List[Path] = []
+    targets = list(_lsl_cfg_paths())
+    if output_path:
+        targets.insert(0, Path(output_path))
 
-[ports]
-BasePort = {base_port}
-PortRange = 32
-"""
+    for p in targets:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(cfg_content, encoding="utf-8")
+            written.append(p)
+            logger.info("lsl_api.cfg zapsan: %s", p)
+        except Exception as exc:
+            logger.debug("lsl_api.cfg nelze zapsat do %s: %s", p, exc)
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(cfg_content, encoding="utf-8")
-    logger.info("lsl_api.cfg zapsan: %s", output_path)
-    return output_path
+    if not written:
+        raise RuntimeError("Nepodarilo se zapsat lsl_api.cfg do zadneho umisteni")
+
+    return written[0]
 
 
 def get_lsl_cfg_path() -> Optional[Path]:
