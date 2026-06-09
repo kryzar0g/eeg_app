@@ -476,25 +476,34 @@ class EegAppGui:
         self._page_widgets = {}
     
     def _switch_page(self, page_id: str) -> None:
-        """Switch to a different page."""
-        # Remove old page
-        if page_id in self._page_widgets:
-            self._page_widgets[page_id].grid_remove()
-        
-        # Create new page if needed
+        """Prepne na jinou stranku.
+
+        Vsechny stranky sdileji jednu grid bunku, proto je nutne aktivni
+        stranku skryt (grid_remove) a cilovou vynest navrch (tkraise).
+        Bez toho by se stranky prekryvaly podle poradi vytvoreni (z-order)
+        a po prvni navsteve uz by slo prepnout jen jednou.
+        """
+        # Skryt aktualne zobrazenou stranku (pokud nejaka je a je jina)
+        current = getattr(self, "_current_page", None)
+        if current and current != page_id and current in self._page_widgets:
+            self._page_widgets[current].grid_remove()
+
+        # Vytvorit stranku pri prvni navsteve, jinak znovu zobrazit
         if page_id not in self._page_widgets:
-            builder = self._pages[page_id]
             page = ttk.Frame(self._page_container)
             page.grid(row=0, column=0, sticky="nsew")
             page.columnconfigure(0, weight=1)
             page.rowconfigure(0, weight=1)
-            
-            builder(page)
+            self._pages[page_id](page)
             self._page_widgets[page_id] = page
         else:
             self._page_widgets[page_id].grid()
-        
-        # Highlight aktivni navigacni tlacitko pomoci stylu
+
+        # Vynest cilovou stranku navrch z-orderu
+        self._page_widgets[page_id].tkraise()
+        self._current_page = page_id
+
+        # Highlight aktivni navigacni tlacitko
         for pid, btn in self._nav_buttons.items():
             btn.configure(style="NavActive.TButton" if pid == page_id else "Nav.TButton")
 
