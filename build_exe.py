@@ -28,9 +28,40 @@ DIST_DIR     = PROJECT_ROOT / "dist"
 SEP          = ";" if sys.platform == "win32" else ":"
 
 
+def _has_all_deps(python_exe: str) -> bool:
+    """Overi, ze dany Python ma vsechny klicove zavislosti pro EXE."""
+    import subprocess
+    check = (
+        "import pydantic, mne, edfio, numpy, scipy, sklearn, pylsl, yaml; "
+        "print('OK')"
+    )
+    try:
+        r = subprocess.run([python_exe, "-c", check],
+                           capture_output=True, text=True, timeout=60)
+        return "OK" in r.stdout
+    except Exception:
+        return False
+
+
 def _find_python() -> str:
+    """Vybere Python s KOMPLETNIMI zavislostmi.
+
+    Preferuje interpret, ktery spustil tento skript (sys.executable),
+    pokud ma vsechny balicky. Jinak zkusi .venv310. Tim se zabrani
+    sestaveni z neuplneho prostredi (chybejici pydantic/edfio).
+    """
+    candidates = [sys.executable]
     if VENV_PYTHON.is_file():
-        return str(VENV_PYTHON)
+        candidates.append(str(VENV_PYTHON))
+
+    for py in candidates:
+        if _has_all_deps(py):
+            print(f"Pouzivam Python s kompletnimi zavislostmi: {py}")
+            return py
+
+    # Nikdo nema vse - varovat a pouzit sys.executable
+    print("VAROVANI: zadny interpret nema vsechny zavislosti!")
+    print("  Nainstalujte: python -m pip install -r requirements.txt")
     return sys.executable
 
 
@@ -133,6 +164,12 @@ def build():
         "--hidden-import", "scipy.sparse.csgraph._validation",
         "--hidden-import", "pydantic",
         "--hidden-import", "yaml",
+        # ERD analyza + grafy
+        "--hidden-import", "src.analysis_erd",
+        "--hidden-import", "src.lsl_network",
+        "--hidden-import", "matplotlib",
+        "--hidden-import", "matplotlib.backends.backend_agg",
+        "--collect-data", "matplotlib",
 
         # ── multiprocessing freeze_support (KRIT. pro Windows EXE) ──
         # Bez tohoto spawnovany proces (paradigma) znovu spusti

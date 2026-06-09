@@ -1,14 +1,20 @@
 experiment:
   subject_id: "S001"
   session_id: "session_001"
-  # počet trialů na třídu
-  trials_per_class: 36
-  # délky intervalů v sekundách
-  baseline_duration: 1.5
-  cue_duration: 0.8
-  imagery_duration: 3.0
+  # Pocet trialu na tridu. 4 tridy x 20 = 80 trialu (~12 min).
+  # Pro kvalitnejsi trenink zvyste na 40-72 (BCI Competition IV pouziva 72).
+  trials_per_class: 20
+  # ── Casovani jednoho trialu (sekundy) ──────────────────────────────
+  # 1. baseline : fixacni kriz, klid
+  # 2. cue      : zobrazi se SIPKA (smer = trida). Ucastnik se muze divat/mrkat.
+  # 3. imagery  : sipka ZMIZI, jen fixacni kriz. Marker se posila ZDE.
+  #               Tohle je nahrane okno -> bez ocnich artefaktu z presunu pohledu.
+  # 4. iti      : pauza mezi trialy
+  baseline_duration: 2.0
+  cue_duration: 1.25
+  imagery_duration: 4.0
   iti_duration: 1.5
-  # ERP averaging: 1 = bez průměrování, >1 = průměrovat N opakování za sebou
+  # ERP averaging: 1 = bez prumerovani, >1 = prumerovat N opakovani za sebou
   n_averages: 1
 
 lsl:
@@ -16,22 +22,31 @@ lsl:
   eeg_stream_type: "EEG"
   marker_stream_name: "Markers"
   resolution_timeout: 10.0
-  # Sit: pridat IP adresu EEG zarizeni pro prime pripojeni pres sit.
-  # Pokud je EEG na stejne lokalni siti, nechat prazdne (autodetekce).
-  # Priklad pro zarizeni na jine podsiti: known_peers: ["192.168.1.100"]
+  # Sit: IP adresa EEG zarizeni pro prime pripojeni pres sit (prazdne = autodetekce)
   known_peers: []
 
 paradigm:
+  type: "motor_imagery_arrows"
+  # 4 tridy motoricke imaginace (BCI Competition IV 2a)
   classes:
-    UP: 1
-    DOWN: 2
-    LEFT: 3
-    RIGHT: 4
+    LEFT_HAND: 1
+    RIGHT_HAND: 2
+    BOTH_FEET: 3
+    TONGUE: 4
+  # Mapovani tridy -> smer sipky + popisek na obrazovce
+  cues:
+    LEFT_HAND:  { arrow: "left",  label: "LEVA RUKA" }
+    RIGHT_HAND: { arrow: "right", label: "PRAVA RUKA" }
+    BOTH_FEET:  { arrow: "down",  label: "OBE NOHY" }
+    TONGUE:     { arrow: "up",    label: "JAZYK" }
+  # Oddelit cue od imaginace (marker az na zacatku imaginace).
+  # Doporuceno True - zamezuje ocnim artefaktum v nahranem okne.
+  separate_cue_imagery: true
 
 preprocessing:
-  sfreq: 250.0  # očekávaný vzorkovací kmitočet (Hz)
-  l_freq: 8.0   # dolní mez band-pass filtru (Hz)
-  h_freq: 30.0  # horní mez band-pass filtru (Hz)
+  sfreq: 250.0  # ocekavany vzorkovaci kmitocet (Hz) - prepise se podle streamu
+  l_freq: 8.0   # dolni mez band-pass filtru (Hz)
+  h_freq: 30.0  # horni mez band-pass filtru (Hz)
   notch_freq: 50.0
   car: true
 
@@ -55,11 +70,31 @@ classifier:
   test_size: 0.2
 
 events:
-  # režim získávání událostí: "stim" (kanál v EDF/BDF) nebo "csv"
-  mode: "csv"
-  stim_channel: "STI 014"  # název stimulačního kanálu v EDF/BDF (pro mode="stim")
-  tmin: 0.0                 # začátek epochy relativně k markeru (s, pro mode="stim")
-  tmax: 4.0                 # konec epochy relativně k markeru (s, pro mode="stim")
-  # CSV s časovými intervaly (start_seconds; end_seconds; label) pro mode="csv"
+  # Pro BDF z interniho recorderu se rezim detekuje automaticky (Status kanal).
+  mode: "annotations"
+  stim_channel: "STI 014"
+  tmin: 0.0                 # zacatek epochy = marker (= zacatek imaginace)
+  tmax: 4.0                 # konec epochy = imagery_duration
   timestamp_csv_path: "data/timestamps.csv"
-  epoch_length: 4.0         # délka epochy v sekundách pro segmentaci intervalů
+  epoch_length: 4.0
+
+# ── ERD / koherence analyza ───────────────────────────────────────────
+# Pri motoricke imaginaci ruky se UTLUMI mu (8-12 Hz) a beta (13-30 Hz)
+# rytmus v KONTRALATERALNI hemisfere (leva ruka -> prava hemisfera C4,
+# prava ruka -> leva hemisfera C3). Tomuto utlumu se rika ERD
+# (Event-Related Desynchronization).
+analysis:
+  # Nazvy kanalu nad motorickym kortexem. Pokud zarizeni nema presne
+  # tyto nazvy, aplikace zkusi najit podle podretezce, jinak pouzije
+  # rozdeleni kanalu na levou/pravou polovinu.
+  channels:
+    left_hemisphere: ["C3", "FC3", "CP3"]   # kontralateralni k PRAVE ruce
+    right_hemisphere: ["C4", "FC4", "CP4"]  # kontralateralni k LEVE ruce
+    central: ["Cz", "FCz", "CPz"]           # nohy / jazyk
+  bands:
+    mu: [8.0, 12.0]
+    beta: [13.0, 30.0]
+  # Referencni (baseline) okno pred markerem pro vypocet ERD v %.
+  # Marker = zacatek imaginace, takze -1.5..-0.5 s je pred-stimulacni klid.
+  baseline_window: [-1.5, -0.5]
+  imagery_window: [0.5, 3.5]   # okno imaginace pro ERD (vynechat prvni 0.5s)

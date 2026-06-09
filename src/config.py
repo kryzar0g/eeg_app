@@ -95,6 +95,7 @@ class AppConfig(BaseModel):
     # Additional optional sections from YAML
     paradigm: Dict[str, Any] = Field(default_factory=dict)
     events: Dict[str, Any] = Field(default_factory=dict)
+    analysis: Dict[str, Any] = Field(default_factory=dict)
     
     class Config:
         extra = "allow"  # Allow additional fields

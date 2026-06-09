@@ -315,14 +315,71 @@ class EegAppGui:
         self._on_page_change()
         self._root.after(150, self._prompt_for_patient_profile)
     
+    # ── Moderni paleta ────────────────────────────────────────────────────
+    BG       = "#F4F6F9"   # svetle pozadi obsahu
+    SIDEBAR  = "#1E2128"   # tmavy sidebar
+    SIDEBAR2 = "#272B34"   # tmavsi prvek v sidebaru
+    ACCENT   = "#4DA3FF"   # modry akcent (ladi se sipkou)
+    ACCENT_D = "#3B82D6"   # tmavsi akcent (hover)
+    TEXT     = "#2C3038"   # tmavy text
+    MUTED    = "#8A8F98"   # tlumeny text
+    CARD     = "#FFFFFF"   # karty
+
     def _build_ui(self) -> None:
         """Build the UI with hierarchical navigation."""
+        FONT = "Segoe UI"
+        self._root.configure(bg=self.BG)
+
         style = ttk.Style(self._root)
-        style.configure("Title.TLabel", font=("Helvetica", 16, "bold"))
-        style.configure("Section.TLabel", font=("Helvetica", 12, "bold"))
-        style.configure("Sub.TLabel", font=("Helvetica", 10), foreground="#666666")
-        style.configure("Info.TLabel", font=("Courier", 9), foreground="#333333")
-        
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        # Zakladni prvky
+        style.configure(".", font=(FONT, 10))
+        style.configure("TFrame", background=self.BG)
+        style.configure("Card.TFrame", background=self.CARD)
+        style.configure("TLabel", background=self.BG, foreground=self.TEXT)
+        style.configure("Title.TLabel", font=(FONT, 18, "bold"), foreground=self.TEXT, background=self.BG)
+        style.configure("Section.TLabel", font=(FONT, 12, "bold"), foreground=self.TEXT, background=self.BG)
+        style.configure("Sub.TLabel", font=(FONT, 10), foreground=self.MUTED, background=self.BG)
+        style.configure("Info.TLabel", font=("Consolas", 9), foreground="#4A4F58", background=self.BG)
+        style.configure("TLabelframe", background=self.BG, bordercolor="#D8DCE2", relief="solid")
+        style.configure("TLabelframe.Label", background=self.BG, foreground=self.TEXT, font=(FONT, 10, "bold"))
+        style.configure("TEntry", fieldbackground=self.CARD, bordercolor="#C8CDD5")
+        style.configure("TCombobox", fieldbackground=self.CARD)
+        style.configure("TSeparator", background="#D8DCE2")
+
+        # Tlacitka - flat, akcentni
+        style.configure("TButton", font=(FONT, 10), padding=(12, 7),
+                        background=self.CARD, foreground=self.TEXT,
+                        bordercolor="#C8CDD5", relief="flat")
+        style.map("TButton",
+                  background=[("active", "#E9EDF3"), ("pressed", "#DDE3EB")])
+
+        # Primarni (akcentni) tlacitko
+        style.configure("Accent.TButton", font=(FONT, 11, "bold"),
+                        padding=(14, 10), background=self.ACCENT,
+                        foreground="white", relief="flat", bordercolor=self.ACCENT)
+        style.map("Accent.TButton",
+                  background=[("active", self.ACCENT_D), ("pressed", self.ACCENT_D)],
+                  foreground=[("active", "white")])
+
+        # Navigacni tlacitka v sidebaru
+        style.configure("Nav.TButton", font=(FONT, 11), padding=(16, 12),
+                        background=self.SIDEBAR, foreground="#C3C8D1",
+                        relief="flat", anchor="w", bordercolor=self.SIDEBAR)
+        style.map("Nav.TButton",
+                  background=[("active", self.SIDEBAR2)],
+                  foreground=[("active", "white")])
+        style.configure("NavActive.TButton", font=(FONT, 11, "bold"), padding=(16, 12),
+                        background=self.ACCENT, foreground="white",
+                        relief="flat", anchor="w", bordercolor=self.ACCENT)
+        style.map("NavActive.TButton",
+                  background=[("active", self.ACCENT_D)],
+                  foreground=[("active", "white")])
+
         # Main container
         main_frame = ttk.Frame(self._root)
         main_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
@@ -331,76 +388,73 @@ class EegAppGui:
         main_frame.columnconfigure(0, weight=0)  # left nav
         main_frame.columnconfigure(1, weight=1)  # content
         main_frame.rowconfigure(0, weight=1)
-        
-        # ── LEFT NAVIGATION ────────────────────────────────────────────────
-        nav_frame = ttk.Frame(main_frame, width=200)
-        nav_frame.grid(row=0, column=0, sticky="ns", padx=0, pady=0)
+
+        # ── LEFT NAVIGATION (tmavy sidebar) ─────────────────────────────────
+        nav_frame = tk.Frame(main_frame, width=220, bg=self.SIDEBAR)
+        nav_frame.grid(row=0, column=0, sticky="ns")
         nav_frame.grid_propagate(False)
-        
-        ttk.Label(nav_frame, text="🧠 EEG BCI", style="Title.TLabel").pack(
-            side="top", padx=10, pady=10, anchor="w"
-        )
-        
-        ttk.Separator(nav_frame, orient="horizontal").pack(
-            side="top", fill="x", padx=5, pady=5
-        )
-        
+
+        tk.Label(nav_frame, text="  EEG BCI", bg=self.SIDEBAR, fg="white",
+                 font=(FONT, 17, "bold")).pack(side="top", fill="x", padx=14, pady=(20, 4), anchor="w")
+        tk.Label(nav_frame, text="  Motor Imagery", bg=self.SIDEBAR, fg=self.ACCENT,
+                 font=(FONT, 9)).pack(side="top", fill="x", padx=14, pady=(0, 16), anchor="w")
+
         # Navigation buttons
         self._nav_buttons = {}
         nav_items = [
-            ("info",    "ℹ️  Overview"),
-            ("network", "🌐 Network EEG"),
-            ("record",  "▶️  Record"),
-            ("offline", "📊 Train Model"),
-            ("online",  "🔴 Online BCI"),
+            ("info",    "  Prehled"),
+            ("network", "  Sit / EEG stream"),
+            ("record",  "  Zaznam mereni"),
+            ("offline", "  Trenink + ERD"),
+            ("online",  "  Online BCI"),
         ]
-        
+
         for page_id, label in nav_items:
             btn = ttk.Button(
                 nav_frame,
                 text=label,
+                style="Nav.TButton",
                 command=lambda p=page_id: self._switch_page(p),
+                takefocus=False,
             )
-            btn.pack(side="top", fill="x", padx=5, pady=2)
+            btn.pack(side="top", fill="x", padx=8, pady=2)
             self._nav_buttons[page_id] = btn
+
+        tk.Frame(nav_frame, height=1, bg=self.SIDEBAR2).pack(side="top", fill="x", padx=12, pady=14)
+
+        # Config info (v sidebaru)
+        tk.Label(nav_frame, text="KONFIGURACE", bg=self.SIDEBAR, fg=self.MUTED,
+                 font=(FONT, 8, "bold")).pack(side="top", padx=14, pady=(0, 4), anchor="w")
         
-        ttk.Separator(nav_frame, orient="horizontal").pack(
-            side="top", fill="x", padx=5, pady=10
-        )
-        
-        # Config info
-        ttk.Label(nav_frame, text="Configuration", style="Section.TLabel").pack(
-            side="top", padx=10, pady=(10, 5), anchor="w"
-        )
-        
+        FONT = "Segoe UI"
         if self._config:
+            n_cls = len(self._config.paradigm.get("classes", {}))
             config_text = (
-                f"Trials/class: {self._config.experiment.trials_per_class}\n"
-                f"Freq bands: {self._config.features.bands}\n"
-                f"Sampling: {self._config.preprocessing.sfreq} Hz\n"
-                f"Classes: {len(self._config.paradigm.get('classes', {}))}"
+                f"Trialu/trida : {self._config.experiment.trials_per_class}\n"
+                f"Trid         : {n_cls}\n"
+                f"Vzorkovani   : {self._config.preprocessing.sfreq:.0f} Hz\n"
+                f"Filtr        : {self._config.preprocessing.l_freq:.0f}-{self._config.preprocessing.h_freq:.0f} Hz"
             )
-            ttk.Label(nav_frame, text=config_text, style="Info.TLabel", justify="left").pack(
-                side="top", padx=10, anchor="w"
-            )
+            tk.Label(nav_frame, text=config_text, bg=self.SIDEBAR, fg="#A8AEB8",
+                     font=("Consolas", 8), justify="left").pack(side="top", padx=14, anchor="w")
 
-        ttk.Separator(nav_frame, orient="horizontal").pack(
-            side="top", fill="x", padx=5, pady=10
+        tk.Frame(nav_frame, height=1, bg=self.SIDEBAR2).pack(side="top", fill="x", padx=12, pady=14)
+
+        tk.Label(nav_frame, text="PACIENT", bg=self.SIDEBAR, fg=self.MUTED,
+                 font=(FONT, 8, "bold")).pack(side="top", padx=14, pady=(0, 4), anchor="w")
+        self._profile_sidebar_label = tk.Label(
+            nav_frame, textvariable=self._profile_label_var, bg=self.SIDEBAR,
+            fg="white", font=(FONT, 9), justify="left", wraplength=190,
+        )
+        self._profile_sidebar_label.pack(side="top", padx=14, anchor="w")
+        ttk.Button(nav_frame, text="  Vybrat / vytvorit", style="Nav.TButton",
+                   command=self._prompt_for_patient_profile, takefocus=False).pack(
+            side="top", fill="x", padx=8, pady=(8, 0)
         )
 
-        ttk.Label(nav_frame, text="Patient", style="Section.TLabel").pack(
-            side="top", padx=10, pady=(0, 5), anchor="w"
-        )
-        ttk.Label(nav_frame, textvariable=self._profile_label_var, style="Info.TLabel", justify="left").pack(
-            side="top", padx=10, anchor="w"
-        )
-        ttk.Button(nav_frame, text="Select / Create", command=self._prompt_for_patient_profile).pack(
-            side="top", fill="x", padx=5, pady=(6, 0)
-        )
-        
         # ── RIGHT CONTENT AREA ─────────────────────────────────────────────
         self._content_frame = ttk.Frame(main_frame)
-        self._content_frame.grid(row=0, column=1, sticky="nsew", padx=15, pady=15)
+        self._content_frame.grid(row=0, column=1, sticky="nsew", padx=24, pady=22)
         self._content_frame.columnconfigure(0, weight=1)
         self._content_frame.rowconfigure(0, weight=1)
         
@@ -440,15 +494,10 @@ class EegAppGui:
         else:
             self._page_widgets[page_id].grid()
         
-        # Highlight button
+        # Highlight aktivni navigacni tlacitko pomoci stylu
         for pid, btn in self._nav_buttons.items():
-            state = "pressed" if pid == page_id else "normal"
-            # Use a visual indicator
-            if pid == page_id:
-                btn.configure(text="→ " + self._nav_buttons[pid].cget("text").split("→ ")[-1])
-            else:
-                btn.configure(text=self._nav_buttons[pid].cget("text").split("→ ")[-1])
-        
+            btn.configure(style="NavActive.TButton" if pid == page_id else "Nav.TButton")
+
         self._mode_var.set(page_id)
     
     def _on_page_change(self) -> None:
@@ -458,59 +507,58 @@ class EegAppGui:
     
     # ── PAGE BUILDERS ──────────────────────────────────────────────────────
     
+    def _card(self, parent, title: str) -> ttk.Frame:
+        """Vytvori 'kartu' - ramecek se stinem-like ohraničenim a nadpisem."""
+        outer = ttk.Labelframe(parent, text=title, padding=14)
+        outer.pack(fill="x", pady=(0, 14))
+        return outer
+
     def _build_info_page(self, parent: ttk.Frame) -> None:
-        """Build the overview/info page."""
-        ttk.Label(parent, text="EEG Motor Imagery BCI System", style="Title.TLabel").pack(
-            anchor="w", pady=(0, 10)
+        """Prehledova stranka."""
+        ttk.Label(parent, text="Prehled systemu", style="Title.TLabel").pack(
+            anchor="w", pady=(0, 4)
         )
-        
-        info_text = """
-🧠 Overview
-This is a flexible Brain-Computer Interface system for motor imagery classification.
+        ttk.Label(
+            parent,
+            text="Brain-Computer Interface pro rozpoznavani motoricke imaginace z EEG.",
+            style="Sub.TLabel",
+        ).pack(anchor="w", pady=(0, 16))
 
-📊 System Features:
-• Supports any number of EEG channels (8, 32, 64, 128, ...)
-• Flexible paradigm with N-class motor imagery (2-class, 4-class, etc.)
-• Online real-time classification with trained models
-• Offline analysis and model training
-• Structured logging to file and console
+        # Workflow karta
+        wf = self._card(parent, "Pracovni postup")
+        steps = [
+            ("1.  Sit / EEG stream", "Pripojeni k EEG zarizeni pres LSL po siti"),
+            ("2.  Zaznam mereni", "4 tridy motoricke imaginace, ulozeni do BDF s markery"),
+            ("3.  Trenink + ERD", "Trenovani modelu + analyza kontralateralniho utlumu"),
+            ("4.  Online BCI", "Realtime predikce na zivem EEG streamu"),
+        ]
+        for title, desc in steps:
+            row = ttk.Frame(wf)
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=title, style="Section.TLabel", width=22).pack(side="left", anchor="w")
+            ttk.Label(row, text=desc, style="Sub.TLabel").pack(side="left", anchor="w")
 
-🔧 Current Configuration:
-"""
-        ttk.Label(parent, text=info_text, style="Sub.TLabel", justify="left").pack(
-            anchor="w", pady=10
-        )
-        
         if self._config:
-            config_frame = ttk.LabelFrame(parent, text="Active Configuration", padding=10)
-            config_frame.pack(fill="x", pady=10)
-            
-            config_info = f"""
-Experiment:
-  • Trials per class: {self._config.experiment.trials_per_class}
-  • Baseline: {self._config.experiment.baseline_duration}s
-  • Cue: {self._config.experiment.cue_duration}s
-  • Imagery: {self._config.experiment.imagery_duration}s
-  • ITI: {self._config.experiment.iti_duration}s
+            cfg = self._config
+            classes = ", ".join(cfg.paradigm.get("classes", {}).keys())
+            total = cfg.experiment.trials_per_class * len(cfg.paradigm.get("classes", {}))
 
-EEG Setup:
-  • Sampling rate: {self._config.preprocessing.sfreq} Hz
-  • Band-pass: {self._config.preprocessing.l_freq}-{self._config.preprocessing.h_freq} Hz
-  • Notch: {self._config.preprocessing.notch_freq} Hz
-
-Classification:
-  • Algorithm: {self._config.classifier.algorithm.upper()}
-  • Test split: {self._config.classifier.test_size*100:.0f}%
-  • Feature bands: {self._config.features.bands}
-
-Paradigm:
-  • Classes: {len(self._config.paradigm.get('classes', {}))}
-  • Available: {', '.join(self._config.paradigm.get('classes', {}).keys())}
-"""
-            
-            ttk.Label(config_frame, text=config_info, style="Info.TLabel", justify="left").pack(
-                anchor="w"
-            )
+            c = self._card(parent, "Aktualni konfigurace")
+            grid = ttk.Frame(c)
+            grid.pack(fill="x")
+            rows = [
+                ("Tridy", classes),
+                ("Trialu celkem", f"{total}  ({cfg.experiment.trials_per_class} na tridu)"),
+                ("Casovani", f"baseline {cfg.experiment.baseline_duration}s -> cue {cfg.experiment.cue_duration}s "
+                             f"-> imaginace {cfg.experiment.imagery_duration}s -> pauza {cfg.experiment.iti_duration}s"),
+                ("Vzorkovani", f"{cfg.preprocessing.sfreq:.0f} Hz"),
+                ("Filtr", f"{cfg.preprocessing.l_freq:.0f}-{cfg.preprocessing.h_freq:.0f} Hz, notch {cfg.preprocessing.notch_freq:.0f} Hz"),
+                ("Priznaky", f"{cfg.features.method.upper()}, pasma {cfg.features.bands}"),
+                ("Klasifikator", cfg.classifier.algorithm.upper()),
+            ]
+            for i, (k, v) in enumerate(rows):
+                ttk.Label(grid, text=k, style="Section.TLabel", width=16).grid(row=i, column=0, sticky="w", pady=2)
+                ttk.Label(grid, text=v, style="Sub.TLabel").grid(row=i, column=1, sticky="w", pady=2)
     
     # ── Network EEG page ──────────────────────────────────────────────────────
 
@@ -876,120 +924,117 @@ Paradigm:
         )
 
     def _build_record_page(self, parent: ttk.Frame) -> None:
-        """Build the record paradigm page."""
-        ttk.Label(parent, text="▶️  Record Motor Imagery Session", style="Title.TLabel").pack(
-            anchor="w", pady=(0, 10)
+        """Stranka zaznamu motoricke imaginace."""
+        ttk.Label(parent, text="Zaznam mereni", style="Title.TLabel").pack(
+            anchor="w", pady=(0, 4)
         )
-        
-        info = ttk.Frame(parent)
-        info.pack(fill="x", pady=10)
-        
         ttk.Label(
-            info,
-            text="This mode presents visual stimuli for motor imagery tasks.\n"
-                 "EEG data should be recorded using LabRecorder or similar LSL-compatible software.\n"
-                 "Markers will be sent via LSL to synchronize with the visual paradigm.\n"
-                 "Press ESC during the paradigm to stop the session safely.",
+            parent,
+            text="Spusti vizualni paradigma motoricke imaginace a soucasne nahrava EEG z LSL do BDF.",
             style="Sub.TLabel",
-            justify="left",
-        ).pack(anchor="w")
-        
-        # Requirements
-        req_frame = ttk.LabelFrame(parent, text="Requirements", padding=10)
-        req_frame.pack(fill="x", pady=10)
-        
+        ).pack(anchor="w", pady=(0, 16))
+
+        # Prubeh trialu
+        flow = self._card(parent, "Prubeh jednoho trialu")
+        cfg = self._config
+        if cfg:
+            e = cfg.experiment
+            ttk.Label(
+                flow,
+                text=(
+                    f"1. Fixacni kriz ({e.baseline_duration}s)  ->  "
+                    f"2. SIPKA smer ({e.cue_duration}s)  ->  "
+                    f"3. IMAGINACE bez sipky ({e.imagery_duration}s)  ->  "
+                    f"4. pauza ({e.iti_duration}s)\n\n"
+                    "Marker se posila na zacatku faze 3 (imaginace), kdy uz na obrazovce\n"
+                    "neni sipka -> nahrane okno neobsahuje ocni artefakty z presunu pohledu."
+                ),
+                style="Sub.TLabel", justify="left",
+            ).pack(anchor="w")
+
+        # Tridy / smery
+        cls = self._card(parent, "Tridy a smery sipek")
         ttk.Label(
-            req_frame,
-            text="✓ LabRecorder running and connected to EEG stream\n"
-                 "✓ LSL marker stream listener configured\n"
-                 "✓ Display with sufficient resolution for paradigm\n"
-                 "✓ PsychoPy library installed",
-            style="Sub.TLabel",
-            justify="left",
+            cls,
+            text=("<-  LEVA RUKA          ->  PRAVA RUKA\n"
+                  "dolu  OBE NOHY       nahoru  JAZYK"),
+            style="Info.TLabel", justify="left",
         ).pack(anchor="w")
-        
-        # Start button
-        ttk.Button(parent, text="▶  Start Recording Session", command=self._on_start_record).pack(
-            fill="x", pady=20
-        )
-    
+
+        # Predpoklady
+        req = self._card(parent, "Pred spustenim")
+        ttk.Label(
+            req,
+            text=("- EEG stream dostupny (zalozka Sit / EEG stream -> Skenovat)\n"
+                  "- vybrany pacient (panel vlevo dole)\n"
+                  "- nainstalovany PsychoPy\n"
+                  "- ESC kdykoli behem mereni ukonci session"),
+            style="Sub.TLabel", justify="left",
+        ).pack(anchor="w")
+
+        ttk.Button(parent, text="Spustit zaznam mereni", style="Accent.TButton",
+                   command=self._on_start_record).pack(fill="x", pady=(8, 0))
+
     def _build_offline_page(self, parent: ttk.Frame) -> None:
-        """Build the offline training page."""
-        ttk.Label(parent, text="📊 Train Classification Model", style="Title.TLabel").pack(
-            anchor="w", pady=(0, 10)
+        """Stranka treninku modelu + ERD analyzy."""
+        ttk.Label(parent, text="Trenink modelu + ERD analyza", style="Title.TLabel").pack(
+            anchor="w", pady=(0, 4)
         )
-        
-        info = ttk.Frame(parent)
-        info.pack(fill="x", pady=10)
-        
         ttk.Label(
-            info,
-            text="Load an EEG recording (EDF/BDF format) and train a classifier model.\n"
-                 "Features are extracted using power spectral density in configured frequency bands.\n"
-                 "The model is automatically saved for later use in online classification.",
+            parent,
+            text="Nacte nahravku (BDF/EDF/FIF), natrenuje klasifikator a spocita ERD/koherenci.",
             style="Sub.TLabel",
-            justify="left",
-        ).pack(anchor="w")
-        
-        # File selection
-        file_frame = ttk.LabelFrame(parent, text="EEG File Selection", padding=10)
-        file_frame.pack(fill="x", pady=10)
-        
-        ttk.Label(file_frame, text="Select EEG file (EDF/BDF):", style="Section.TLabel").pack(
-            anchor="w", pady=(0, 5)
+        ).pack(anchor="w", pady=(0, 16))
+
+        # Vyber souboru
+        file_frame = self._card(parent, "EEG soubor (BDF / EDF / FIF)")
+        entry_row = ttk.Frame(file_frame)
+        entry_row.pack(fill="x")
+        ttk.Entry(entry_row, textvariable=self._file_var).pack(
+            side="left", fill="x", expand=True, padx=(0, 8)
         )
-        
-        file_entry_frame = ttk.Frame(file_frame)
-        file_entry_frame.pack(fill="x", pady=5)
-        
-        ttk.Entry(file_entry_frame, textvariable=self._file_var).pack(
-            side="left", fill="x", expand=True, padx=(0, 5)
-        )
-        ttk.Button(file_entry_frame, text="Browse...", command=self._browse_file).pack(
-            side="left"
-        )
-        
-        # Start button
-        ttk.Button(parent, text="📊 Train Model", command=self._on_start_offline).pack(
-            fill="x", pady=20
-        )
+        ttk.Button(entry_row, text="Prochazet...", command=self._browse_file).pack(side="left")
+
+        # Akce
+        actions = self._card(parent, "Akce")
+        ttk.Label(
+            actions,
+            text="Trenink: extrahuje priznaky (FBCSP), natrenuje LDA/SVM, ulozi model.\n"
+                 "ERD analyza: spocita kontralateralni utlum mu/beta + koherenci hemisfer.",
+            style="Sub.TLabel", justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+
+        btn_row = ttk.Frame(actions)
+        btn_row.pack(fill="x")
+        ttk.Button(btn_row, text="Trenovat model", style="Accent.TButton",
+                   command=self._on_start_offline).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="ERD / koherence analyza",
+                   command=self._on_start_erd).pack(side="left")
     
     def _build_online_page(self, parent: ttk.Frame) -> None:
-        """Build the online BCI page."""
-        ttk.Label(parent, text="🔴 Real-Time Classification", style="Title.TLabel").pack(
-            anchor="w", pady=(0, 10)
+        """Stranka realtime predikce."""
+        ttk.Label(parent, text="Online BCI - realtime predikce", style="Title.TLabel").pack(
+            anchor="w", pady=(0, 4)
         )
-        
-        info = ttk.Frame(parent)
-        info.pack(fill="x", pady=10)
-        
         ttk.Label(
-            info,
-            text="Connect to EEG stream and perform real-time classification using a trained model.\n"
-                 "Predictions are made continuously on sliding windows of EEG data.\n"
-                 "Press Ctrl+C to stop.",
+            parent,
+            text="Pripoji se k zivemu EEG streamu a prubezne klasifikuje motorickou imaginaci "
+                 "natrenovanym modelem.",
             style="Sub.TLabel",
-            justify="left",
-        ).pack(anchor="w")
-        
-        # Requirements
-        req_frame = ttk.LabelFrame(parent, text="Requirements", padding=10)
-        req_frame.pack(fill="x", pady=10)
-        
+        ).pack(anchor="w", pady=(0, 16))
+
+        req = self._card(parent, "Pred spustenim")
         ttk.Label(
-            req_frame,
-            text="✓ Trained model exists (run 'Train Model' first)\n"
-                 "✓ EEG stream available via LSL (LabRecorder or similar)\n"
-                 "✓ Same number of channels and band configuration as training\n"
-                 "✓ EEG_MODEL_PATH environment variable (optional)",
-            style="Sub.TLabel",
-            justify="left",
+            req,
+            text=("- existuje natrenovany model (zalozka Trenink + ERD)\n"
+                  "- EEG stream dostupny pres LSL (zalozka Sit / EEG stream)\n"
+                  "- stejny pocet kanalu a pasem jako pri treninku\n"
+                  "- predikce se vypisuji do logu, zastaveni: zavrenim okna logu"),
+            style="Sub.TLabel", justify="left",
         ).pack(anchor="w")
-        
-        # Start button
-        ttk.Button(parent, text="🔴 Start Online BCI", command=self._on_start_online).pack(
-            fill="x", pady=20
-        )
+
+        ttk.Button(parent, text="Spustit Online BCI", style="Accent.TButton",
+                   command=self._on_start_online).pack(fill="x", pady=(8, 0))
 
     def _prompt_for_patient_profile(self) -> None:
         """Open the modal profile picker and store the selected patient."""
@@ -997,7 +1042,7 @@ Paradigm:
         profile = dialog.show()
         if profile is None:
             if self._patient_profile is None:
-                self._profile_label_var.set("No patient selected")
+                self._profile_label_var.set("Zadny pacient nevybran")
             return
 
         self._patient_profile = profile
@@ -1101,14 +1146,22 @@ Paradigm:
     def _on_start_offline(self) -> None:
         """Start offline training mode."""
         if not self._file_var.get():
-            messagebox.showerror("Missing File", "Please select an EEG file first")
+            messagebox.showerror("Chybi soubor", "Nejprve vyberte EEG soubor (BDF/EDF/FIF).")
             return
-        selection = GuiSelection(mode="offline", offline_file=self._file_var.get())
+        selection = GuiSelection(mode="offline", offline_file=self._file_var.get(), config=self._config)
         self._start_task(selection)
-    
+
+    def _on_start_erd(self) -> None:
+        """Spustit ERD / koherence analyzu."""
+        if not self._file_var.get():
+            messagebox.showerror("Chybi soubor", "Nejprve vyberte EEG soubor (BDF/EDF/FIF).")
+            return
+        selection = GuiSelection(mode="erd", offline_file=self._file_var.get(), config=self._config)
+        self._start_task(selection)
+
     def _on_start_online(self) -> None:
         """Start online BCI mode."""
-        selection = GuiSelection(mode="online")
+        selection = GuiSelection(mode="online", config=self._config)
         self._start_task(selection)
     
     def _start_task(self, selection: GuiSelection) -> None:
@@ -1260,13 +1313,25 @@ def _run_selection(selection: GuiSelection) -> None:
             raise ValueError("No EEG file selected")
 
         acc, n_epochs = run_offline_from_file(selection.offline_file)
-        print(f"\n✓ Trénování dokončeno: {n_epochs} epoch, přesnost: {acc:.4f}")
+        print(f"\nTrenovani dokonceno: {n_epochs} epoch, presnost: {acc:.4f}")
+
+    elif selection.mode == "erd":
+        from .analysis_erd import run_erd_analysis
+
+        if not selection.offline_file:
+            raise ValueError("Nebyl vybran soubor")
+
+        cfg = selection.config
+        result = run_erd_analysis(selection.offline_file, config=cfg)
+        print(result["report_text"])
+        if result.get("figure_path"):
+            print(f"\nGraf ulozen: {result['figure_path']}")
 
     elif selection.mode == "online":
         from .config import load_config
         from .online_bci import run_online_bci
 
-        config = load_config()
+        config = selection.config if selection.config is not None else load_config()
         run_online_bci(config)
 
 

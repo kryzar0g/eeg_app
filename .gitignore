@@ -30,3 +30,10 @@ logs/
 
 # Reports
 reports/
+
+# EXE build + runtime artefakty
+*.spec
+build_log.txt
+lsl_api.cfg
+data/recordings/
+reports/
