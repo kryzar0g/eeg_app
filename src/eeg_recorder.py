@@ -50,6 +50,9 @@ class EegRecorder:
         self._marker_events: List[Tuple[int, str]] = []  # (eeg_sample_index, code)
         self._eeg_sample_count: int = 0  # pocet dosud prijatych EEG vzorku
         self._first_timestamp: Optional[float] = None
+        # Lokalni cas (LSL local_clock) prvniho EEG vzorku po time_correction.
+        # Slouzi k presnemu zarovnani markeru s EEG napric pocitaci.
+        self._first_eeg_local_time: Optional[float] = None
         self._sfreq: float = float(config.preprocessing.sfreq)
         self._ch_names: List[str] = []
 
@@ -128,22 +131,29 @@ class EegRecorder:
         )
 
     def _marker_queue_loop(self) -> None:
-        """Drenuje IPC frontu s markery z paradigma procesu (zaloha k LSL).
+        """Drenuje IPC frontu s markery z paradigma procesu.
 
-        Pozici markeru urcuje podle aktualniho poctu EEG vzorku - stejne
-        jako LSL cesta. Deduplikace: pokud uz LSL marker prisel v podobnem
-        case, nevadi - find_events stejne zaznamena jen prvni hodnotu pulsu.
+        Paradigma posila (code, local_clock_timestamp). Protoze obe procesy
+        bezi na STEJNEM pocitaci, local_clock je stejny hodinovy domen jako
+        time_correction-zarovnany EEG -> sample-accurate synchronizace.
+        Zpetna kompatibilita: pokud prijde holy kod, pouzije se citac vzorku.
         """
         import queue as _queue
         seen = 0
         while self._running:
             try:
-                code = self._marker_queue.get(timeout=0.1)
+                item = self._marker_queue.get(timeout=0.1)
             except (_queue.Empty, Exception):
                 continue
-            if code is None:
+            if item is None:
                 continue
-            sample_idx = int(self._eeg_sample_count)
+            # Format (code, local_clock_ts) nebo holy code
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                code, ts = item
+                sample_idx = self._marker_time_to_sample(float(ts))
+            else:
+                code = item
+                sample_idx = int(self._eeg_sample_count)
             self._marker_events.append((sample_idx, str(code)))
             seen += 1
             logger.info("EegRecorder: marker(IPC) %r @ EEG vzorek %d", code, sample_idx)
@@ -185,11 +195,33 @@ class EegRecorder:
                 continue
             if self._first_timestamp is None and timestamps.size > 0:
                 self._first_timestamp = float(timestamps[0])
+                # Prepocet na LOKALNI hodiny: remote_timestamp + time_correction.
+                # Tim ziskame cas prvniho EEG vzorku ve stejnem hodinovem
+                # domenu jako paradigma (local_clock) -> presne zarovnani.
+                try:
+                    tc = float(self._eeg_inlet.time_correction())
+                except Exception:
+                    tc = 0.0
+                self._first_eeg_local_time = float(timestamps[0]) + tc
+                logger.info("EegRecorder: time_correction=%.4f s, prvni EEG vzorek @ local=%.4f",
+                            tc, self._first_eeg_local_time)
             self._data_chunks.append(chunk)  # (n_samples, n_channels)
-            # Aktualizovat citac vzorku (pro zarovnani markeru bez hodin)
             self._eeg_sample_count += int(chunk.shape[0])
 
         logger.debug("EegRecorder: EEG smyčka ukončena")
+
+    def _marker_time_to_sample(self, marker_local_time: Optional[float]) -> int:
+        """Prevede lokalni cas markeru na index EEG vzorku.
+
+        Pouziva time_correction-zarovnany cas prvniho EEG vzorku a vzorkovaci
+        frekvenci. Tim je marker umisten na presny EEG vzorek i kdyz EEG
+        prichazi ze vzdaleneho PC s jinymi hodinami. Fallback (kdyz cas neni
+        k dispozici): aktualni pocet prijatych vzorku.
+        """
+        if marker_local_time is None or self._first_eeg_local_time is None:
+            return int(self._eeg_sample_count)
+        delta = marker_local_time - self._first_eeg_local_time
+        return max(0, int(round(delta * self._sfreq)))
 
     def _marker_connect_and_loop(self) -> None:
         """Hledá marker LSL stream a po nalezení přijímá markery.
@@ -221,23 +253,27 @@ class EegRecorder:
         self._marker_loop()
 
     def _marker_loop(self) -> None:
-        """Přijímá markery z LSL (volá se po nalezení streamu).
+        """Přijímá markery z LSL a zarovnava je presne podle time_correction.
 
-        Pozici markeru urcujeme podle aktualniho poctu prijatych EEG vzorku
-        (_eeg_sample_count), NE podle LSL timestampu. Tim se vyhneme problemu
-        s ruznymi hodinami, kdyz EEG prichazi ze vzdaleneho PC a markery
-        z lokalniho paradigmatu.
+        Marker timestamp (clock odesilatele) + time_correction = lokalni cas,
+        ktery se prevede na index EEG vzorku. Sample-accurate synchronizace.
         """
+        try:
+            marker_tc = float(self._marker_inlet.time_correction())
+        except Exception:
+            marker_tc = 0.0
+
         n_received = 0
         while self._running:
             try:
                 sample, timestamp = self._marker_inlet.pull_sample(timeout=0.1)
                 if sample and timestamp is not None:
                     marker_code = str(sample[0])
-                    sample_idx = int(self._eeg_sample_count)  # snapshot poctu EEG vzorku
+                    marker_local = float(timestamp) + marker_tc
+                    sample_idx = self._marker_time_to_sample(marker_local)
                     self._marker_events.append((sample_idx, marker_code))
                     n_received += 1
-                    logger.info("EegRecorder: marker %r @ EEG vzorek %d (celkem %d)",
+                    logger.info("EegRecorder: marker(LSL) %r @ EEG vzorek %d (celkem %d)",
                                 marker_code, sample_idx, n_received)
             except Exception as exc:
                 logger.debug("EegRecorder: chyba cteni markeru: %s", exc)

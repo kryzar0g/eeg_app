@@ -61,12 +61,18 @@ class Paradigm(ABC):
         ...
 
     def _emit_marker(self, code: int) -> None:
-        """Posle marker pres LSL (pro externi nastroje) i IPC frontu (interni recorder)."""
+        """Posle marker pres LSL (externi nastroje) i IPC frontu (interni recorder).
+
+        Do IPC fronty prilozi local_clock() timestamp - presny cas markeru
+        ve stejnem hodinovem domenu jako EEG (po time_correction). Tim je
+        marker v zaznamu zarovnan na presny EEG vzorek (synchronizace).
+        """
         from ..lsl_acquisition import push_marker
         push_marker(self.marker_outlet, str(code))
         if self.marker_queue is not None:
             try:
-                self.marker_queue.put_nowait(int(code))   # neblokujici
+                from pylsl import local_clock
+                self.marker_queue.put_nowait((int(code), float(local_clock())))
             except Exception:
                 pass
 
