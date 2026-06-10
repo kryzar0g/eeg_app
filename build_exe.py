@@ -158,7 +158,6 @@ def build():
         "--hidden-import", "psychopy.core",
         "--hidden-import", "pylsl",
         "--hidden-import", "joblib",
-        "--hidden-import", "joblib.externals.loky.backend.managers",
         "--hidden-import", "scipy.signal",
         "--hidden-import", "scipy.linalg",
         "--hidden-import", "scipy.sparse.csgraph._validation",
