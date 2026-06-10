@@ -111,22 +111,24 @@ class MotorImageryParadigm(Paradigm):
             self.win, text="+", color="white", height=0.18, pos=(0, 0), bold=True
         )
 
-        # Jedna centralni sipka, orientace se meni podle trialu
+        # Sipka posunuta NAHORU, aby se neprekryvala s textem uprostred
         self.arrow = self.visual.ShapeStim(
             self.win,
             vertices=_ARROW_VERTICES,
             fillColor="#4DA3FF",
             lineColor="#4DA3FF",
-            pos=(0, 0),
+            pos=(0, 0.4),
             ori=0.0,
         )
 
+        # Popisek smeru UPROSTRED obrazovky (hlavni prvek behem cue)
         self.cue_label = self.visual.TextStim(
-            self.win, text="", color="white", height=0.10, pos=(0, -0.55), bold=True
+            self.win, text="", color="white", height=0.16, pos=(0, 0), bold=True
         )
 
+        # Text "klid" take UPROSTRED (aby clovek nebyl zmaten)
         self.rest_text = self.visual.TextStim(
-            self.win, text="", color="#888888", height=0.07, pos=(0, -0.7)
+            self.win, text="", color="#888888", height=0.10, pos=(0, 0)
         )
 
         self.trials = self._build_trials()
@@ -267,14 +269,14 @@ class MotorImageryParadigm(Paradigm):
                 if not self._phase_fixation(clock, baseline):
                     break
 
-                # ── 2. Cue: zobrazit sipku (BEZ markeru) ─────────────
+                # ── 2. Cue: sipka nahore + popisek UPROSTRED (BEZ markeru) ──
+                # Fixacni kriz se nekresli, aby nebyl za textem uprostred.
                 self.arrow.ori = self._arrow_ori_for(label)
                 self.cue_label.text = self._label_text_for(label)
                 clock.reset()
                 while clock.getTime() < cue_dur:
                     if self._check_escape():
                         raise KeyboardInterrupt
-                    self.fixation.draw()
                     self.arrow.draw()
                     self.cue_label.draw()
                     self.win.flip()
