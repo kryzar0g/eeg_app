@@ -316,11 +316,11 @@ class EegRecorder:
         return raw
 
     def _save_edf(self, patient_name: str) -> Optional[Path]:
-        """Uloží záznam jako BDF s pravymi BDF+ anotacemi.
+        """Uloží záznam jako BDF+ s pravymi anotacemi.
 
         Pořadí pokusů:
-          1. BDF+ s anotacemi pres edfio (markery jako anotace - PRIMARNI)
-          2. BDF s Status kanalem (cisty Python, bez edfio) - zaloha
+          1. BDF+ anotace cistym Pythonem (TAL) - PRIMARNI, bez zavislosti
+          2. BDF+ pres edfio - zaloha pokud by pure-python selhal
           3. FIF pres mne.save - posledni zaloha
         """
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -328,28 +328,28 @@ class EegRecorder:
             c if c.isalnum() or c in "_-" else "_" for c in patient_name
         )
 
-        # ── 1. Primární: BDF+ s anotacemi (edfio) ───────────────────
+        # ── 1. Primární: BDF+ anotace cistym Pythonem (bez zavislosti) ──
         fname_bdf = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.bdf"
         try:
-            self._write_bdf_annotations(fname_bdf)
+            self._write_bdf(fname_bdf, patient_name=patient_name)
             self.saved_path = fname_bdf
             logger.info(f"EegRecorder: uloženo jako BDF+ s anotacemi → {fname_bdf}")
             self._save_markers_csv(fname_bdf)
             return fname_bdf
-        except Exception as exc:
+        except Exception as bdf_exc:
             logger.warning(
-                "EegRecorder: BDF+ anotace selhaly (%s), zkousim Status-kanal BDF...", exc
+                "EegRecorder: pure-python BDF+ selhal (%s), zkousim edfio...", bdf_exc
             )
 
-        # ── 1b. Záloha: BDF se Status kanalem (bez edfio) ───────────
+        # ── 2. Záloha: BDF+ pres edfio ──────────────────────────────
         try:
-            self._write_bdf(fname_bdf, patient_name=patient_name)
+            self._write_bdf_annotations(fname_bdf)
             self.saved_path = fname_bdf
-            logger.info(f"EegRecorder: uloženo jako BDF (Status kanal) → {fname_bdf}")
+            logger.info(f"EegRecorder: uloženo jako BDF+ (edfio) → {fname_bdf}")
             self._save_markers_csv(fname_bdf)
             return fname_bdf
-        except Exception as bdf_exc:
-            logger.warning(f"EegRecorder: BDF zápis selhal ({bdf_exc}), ukladam FIF...")
+        except Exception as exc:
+            logger.warning(f"EegRecorder: edfio BDF+ selhal ({exc}), ukladam FIF...")
 
         # ── 2. Poslední záloha: FIF (s MNE anotacemi) ───────────────
         fname_fif = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.fif"
@@ -423,11 +423,11 @@ class EegRecorder:
         )
 
     def _write_bdf(self, path: Path, patient_name: str = "X") -> None:
-        """Zapíše data přímo do BDF souboru bez externích závislostí.
+        """Zapíše BDF+ s pravymi anotacemi v cistem Pythonu (bez edfio).
 
-        BDF (BioSemi Data Format) = EDF s 24-bitovými vzorky a Status kanálem.
-        Markery se uloží do Status kanálu jako integer kódy.
-        Čistá Python + numpy implementace — funguje v každém prostředí.
+        Markery se ulozi jako BDF+ anotace (TAL) v kanalu "BDF Annotations".
+        MNE je nacte do raw.annotations, EDFbrowser zobrazi jako anotace.
+        24-bit vzorky (BioSemi), funguje v kazdem prostredi.
         """
         import struct
         safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in patient_name)
@@ -436,7 +436,6 @@ class EegRecorder:
         n_samples_total, n_eeg = all_data.shape
         sfreq = self._sfreq
 
-        # Sanitizovat názvy kanálů pro BDF (max 16 ASCII znaků)
         def _edf_label(name: str) -> str:
             safe = "".join(c for c in name if c.isascii() and c.isprintable())
             return safe[:16]
@@ -444,159 +443,138 @@ class EegRecorder:
         ch_labels = [_edf_label(n) for n in self._ch_names] if self._ch_names \
                     else [f"CH{i+1}" for i in range(n_eeg)]
 
-        # Přidat Status kanál pro markery
-        status_labels = ch_labels + ["Status"]
+        # Posledni kanal = "BDF Annotations" (TAL), ne Status
         n_ch = n_eeg + 1
-
-        # Délka jednoho záznamu = 1 sekunda
         record_dur_sec = 1
-        samples_per_record = int(round(sfreq * record_dur_sec))
-        n_records = int(np.ceil(n_samples_total / samples_per_record))
+        eeg_spr = int(round(sfreq * record_dur_sec))           # vzorku/zaznam (EEG)
+        n_records = int(np.ceil(n_samples_total / eeg_spr))
 
-        # Doplnit data na celý počet záznamů
-        pad = n_records * samples_per_record - n_samples_total
+        pad = n_records * eeg_spr - n_samples_total
         if pad > 0:
             all_data = np.vstack([all_data, np.zeros((pad, n_eeg))])
 
-        # Sestavit Status kanál: 0 všude, markery na správných vzorcích.
-        # marker_events = (sample_index, code) -> primo index do status kanalu.
-        status_ch = np.zeros(n_records * samples_per_record, dtype=np.int32)
-        if self._marker_events:
-            # Marker drzime po dobu nekolika vzorku, aby ho find_events spolehlive
-            # zachytil i pri filtraci (sirka pulsu ~ 10 vzorku).
-            pulse_width = max(2, int(round(0.02 * sfreq)))  # ~20 ms
-            for sample_idx, code in self._marker_events:
-                idx = int(sample_idx)
-                if 0 <= idx < len(status_ch):
-                    try:
-                        status_ch[idx:idx + pulse_width] = int(code)
-                    except (ValueError, OverflowError):
-                        pass
+        # ── Sestavit TAL anotace pro kazdy zaznam ────────────────────
+        imagery_dur = float(self.config.experiment.imagery_duration)
+        # markery rozdelit do zaznamu podle onsetu
+        markers_by_rec: dict = {}
+        for sample_idx, code in self._marker_events:
+            onset = float(sample_idx) / sfreq
+            rec_idx = int(onset // record_dur_sec)
+            markers_by_rec.setdefault(rec_idx, []).append((onset, code))
 
-        # ── Detekce jednotek LSL streamu ─────────────────────────────
-        # LSL EEG zařízení posílají data typicky v µV (hodnoty ~1–200).
-        # Pokud jsou hodnoty velmi malé (<0.01), jsou pravděpodobně ve V
-        # a je třeba je převést na µV. Tato auto-detekce zabraňuje
-        # saturaci signálu (clipping) při zápisu do BDF.
+        def _num(x: float) -> bytes:
+            # cislo bez zbytecnych nul: 1.0->"1", 12.5->"12.5"
+            s = ("%f" % x).rstrip("0").rstrip(".")
+            return (s if s else "0").encode("ascii")
+
+        def _tal_for_record(rec_idx: int) -> bytes:
+            # timekeeping TAL (povinny prvni v kazdem zaznamu)
+            tal = b"+" + _num(rec_idx * record_dur_sec) + b"\x14\x14\x00"
+            for onset, code in markers_by_rec.get(rec_idx, []):
+                tal += (b"+" + _num(onset) + b"\x15" + _num(imagery_dur)
+                        + b"\x14" + str(code).encode("ascii") + b"\x14\x00")
+            return tal
+
+        # Velikost annotation kanalu: nejdelsi TAL blok + rezerva
+        max_tal = max((len(_tal_for_record(r)) for r in range(n_records)), default=16)
+        annot_bytes = max(max_tal, 16)
+        annot_spr = int(np.ceil(annot_bytes / 3.0))    # BDF: 3 byty/vzorek
+        annot_bytes = annot_spr * 3
+
+        # ── Detekce jednotek (V vs µV) ───────────────────────────────
         data_abs_max = float(np.abs(all_data).max()) if all_data.size > 0 else 1.0
-
         if data_abs_max < 0.1:
-            # Data jsou ve Voltech (SI) → převést na µV
             eeg_uv_data = all_data * 1e6
-            logger.info("EegRecorder BDF: data detekována v V → převod na µV (×1e6)")
+            logger.info("EegRecorder BDF: data ve V → prevod na µV")
         else:
-            # Data jsou již v µV (typické pro LSL EEG streamy)
             eeg_uv_data = all_data.copy()
-            logger.info(f"EegRecorder BDF: data v µV, max={data_abs_max:.1f} µV")
+            logger.info("EegRecorder BDF: data v µV, max=%.1f µV", data_abs_max)
 
-        # Fyzikální rozsah: nastav dynamicky podle skutečných dat + 20% rezerva
         p_abs = max(float(np.abs(eeg_uv_data).max()) * 1.2, 500.0)
-        phys_min = -p_abs
-        phys_max =  p_abs
-        digi_min = -8388608
-        digi_max =  8388607
-        gain = (phys_max - phys_min) / (digi_max - digi_min)  # µV/digit
+        phys_min, phys_max = -p_abs, p_abs
+        digi_min, digi_max = -8388608, 8388607
+        gain = (phys_max - phys_min) / (digi_max - digi_min)
 
         def _edf_field(value: str, width: int) -> bytes:
-            s = str(value)[:width]
-            return s.ljust(width).encode("ascii")
+            return str(value)[:width].ljust(width).encode("ascii")
 
         now = datetime.now()
+        spr_list = [eeg_spr] * n_eeg + [annot_spr]  # samples/record per signal
 
-        # ── BDF hlavička (EDF spec: přesně 256 bytů) ─────────────────
-        # Pole: version(8) + patient(80) + recording(80) + date(8) +
-        #       time(8) + hdr_bytes(8) + reserved(44) + records(8) +
-        #       duration(8) + n_signals(4) = 256 bytů
+        # ── Hlavni hlavička (256 B) ──────────────────────────────────
         hdr = bytearray()
-
-        # Version: 8 bytů — BDF = 0xFF + "BIOSEMI" (EDF = "0       ")
-        hdr += b'\xff' + b'BIOSEMI'                     # 8 bytů
-        # Local patient identification — 80 bytů
-        hdr += _edf_field(f"X X X {safe_name}", 80)    # 80 bytů
-        # Local recording identification — 80 bytů
-        hdr += _edf_field(
-            f"Startdate {now.strftime('%d-%b-%Y').upper()} X X EegRecorder", 80
-        )                                                # 80 bytů
-        # Start date & time
-        hdr += _edf_field(now.strftime("%d.%m.%y"), 8)  # 8 bytů
-        hdr += _edf_field(now.strftime("%H.%M.%S"), 8)  # 8 bytů
-        # Počet bytů v hlavičce
+        hdr += b'\xff' + b'BIOSEMI'
+        hdr += _edf_field(f"X X X {safe_name}", 80)
+        hdr += _edf_field(f"Startdate {now.strftime('%d-%b-%Y').upper()} X X EegRecorder", 80)
+        hdr += _edf_field(now.strftime("%d.%m.%y"), 8)
+        hdr += _edf_field(now.strftime("%H.%M.%S"), 8)
         n_header_bytes = (n_ch + 1) * 256
-        hdr += _edf_field(str(n_header_bytes), 8)       # 8 bytů
-        # Reserved (44 bytů) — BDF identifikátor "24BIT"
-        hdr += b'24BIT' + b' ' * 39                     # 44 bytů
-        # Počet datových záznamů
-        hdr += _edf_field(str(n_records), 8)            # 8 bytů
-        # Délka záznamu v sekundách
-        hdr += _edf_field(str(record_dur_sec), 8)       # 8 bytů
-        # Počet signálů
+        hdr += _edf_field(str(n_header_bytes), 8)
+        # Reserved: musi zacinat "BDF+C" pro BDF+ s anotacemi
+        hdr += _edf_field("BDF+C", 44)
+        hdr += _edf_field(str(n_records), 8)
+        hdr += _edf_field(str(record_dur_sec), 8)
         hdr += _edf_field(str(n_ch), 4)
+        assert len(hdr) == 256
 
-        assert len(hdr) == 256, f"Hlavicka ma {len(hdr)} bytu misto 256"
+        def _is_annot(i: int) -> bool:
+            return i == n_eeg  # posledni kanal
 
-        # Signálové hlavičky (po 256 bytech na kanál, ale pole jsou rozložena)
-        # Label (16 × n_ch)
-        for lbl in status_labels:
-            hdr += _edf_field(lbl, 16)
-        # Transducer type (80 × n_ch)
+        # Labels
         for i in range(n_ch):
-            hdr += _edf_field("AgAgCl" if i < n_eeg else "Trigger", 80)
-        # Physical dimension (8 × n_ch)
+            hdr += _edf_field("BDF Annotations" if _is_annot(i) else ch_labels[i], 16)
+        # Transducer
         for i in range(n_ch):
-            hdr += _edf_field("uV" if i < n_eeg else "Boolean", 8)
-        # Physical minimum (8 × n_ch)
+            hdr += _edf_field("" if _is_annot(i) else "AgAgCl", 80)
+        # Physical dimension
         for i in range(n_ch):
-            hdr += _edf_field(str(phys_min if i < n_eeg else 0), 8)
-        # Physical maximum (8 × n_ch)
+            hdr += _edf_field("" if _is_annot(i) else "uV", 8)
+        # Physical min
         for i in range(n_ch):
-            hdr += _edf_field(str(phys_max if i < n_eeg else 1), 8)
-        # Digital minimum (8 × n_ch)
+            hdr += _edf_field("-1" if _is_annot(i) else str(phys_min), 8)
+        # Physical max
         for i in range(n_ch):
-            hdr += _edf_field(str(digi_min if i < n_eeg else 0), 8)
-        # Digital maximum (8 × n_ch)
+            hdr += _edf_field("1" if _is_annot(i) else str(phys_max), 8)
+        # Digital min
         for i in range(n_ch):
-            hdr += _edf_field(str(digi_max if i < n_eeg else 1), 8)
-        # Prefiltering (80 × n_ch)
-        for _ in range(n_ch):
+            hdr += _edf_field(str(digi_min), 8)
+        # Digital max
+        for i in range(n_ch):
+            hdr += _edf_field(str(digi_max), 8)
+        # Prefiltering
+        for i in range(n_ch):
             hdr += _edf_field("", 80)
-        # Samples per record (8 × n_ch)
-        for _ in range(n_ch):
-            hdr += _edf_field(str(samples_per_record), 8)
-        # Reserved (32 × n_ch)
-        for _ in range(n_ch):
+        # Samples per record
+        for i in range(n_ch):
+            hdr += _edf_field(str(spr_list[i]), 8)
+        # Reserved
+        for i in range(n_ch):
             hdr += _edf_field("", 32)
 
-        assert len(hdr) == n_header_bytes, \
-            f"Hlavicka: ocekavano {n_header_bytes} B, got {len(hdr)} B"
+        assert len(hdr) == n_header_bytes, f"hdr {len(hdr)} != {n_header_bytes}"
 
-        # ── Datové záznamy ───────────────────────────────────────────
-        def _float_to_int24(arr_uv: np.ndarray) -> np.ndarray:
-            """µV float → int24 (ořezáno na ±8 388 607)."""
-            digital = np.round(arr_uv / gain).astype(np.int64)
-            return np.clip(digital, digi_min, digi_max).astype(np.int32)
+        # ── Data ─────────────────────────────────────────────────────
+        digital = np.clip(np.round(eeg_uv_data / gain), digi_min, digi_max).astype(np.int64)
 
-        eeg_digital = _float_to_int24(eeg_uv_data)  # (total_samples, n_eeg)
+        def _int24le(val: int) -> bytes:
+            # little-endian 24-bit signed (low 3 byty z 32-bit two's complement)
+            return struct.pack('<i', int(val))[:3]
 
         with path.open("wb") as f:
             f.write(bytes(hdr))
             for rec in range(n_records):
-                start = rec * samples_per_record
-                end   = start + samples_per_record
-                # EEG kanály
+                s0 = rec * eeg_spr
+                s1 = s0 + eeg_spr
                 for ch in range(n_eeg):
-                    chunk = eeg_digital[start:end, ch]
-                    for val in chunk:
-                        # int24 little-endian = 3 byty
-                        b = int(val) & 0xFFFFFF
-                        f.write(struct.pack('<I', b)[:3])
-                # Status kanál (int24)
-                for val in status_ch[start:end]:
-                    b = int(val) & 0xFFFFFF
-                    f.write(struct.pack('<I', b)[:3])
+                    for val in digital[s0:s1, ch]:
+                        f.write(_int24le(val))
+                # Annotation kanal: raw TAL byty, doplnene \x00
+                tal = _tal_for_record(rec)
+                f.write(tal.ljust(annot_bytes, b"\x00"))
 
-        logger.debug(
-            f"EegRecorder: BDF zápis dokončen — {n_records} záznamů, "
-            f"{n_ch} kanálů, {samples_per_record} vzorků/záznam"
+        logger.info(
+            "EegRecorder: BDF+ zapsano (%d EEG kanalu + anotace, %d zaznamu, %d markeru)",
+            n_eeg, n_records, len(self._marker_events),
         )
 
     def _save_markers_csv(self, eeg_path: Path) -> None:
