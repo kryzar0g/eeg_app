@@ -38,12 +38,12 @@ class GuiSelection:
     config: Optional[object] = None
 
 
-def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
+def _start_paradigm_proc(pid: Optional[str], pname: Optional[str], marker_queue=None) -> None:
     """Launch the recording paradigm inside a spawned process.
 
-    OPRAVA: Vytváří pouze marker outlet (ne EEG inlet).
-    EEG inlet není pro záznam potřeba – data nahrává interní EegRecorder
-    v hlavním procesu, nebo LabRecorder externě.
+    Vytváří marker outlet (LSL, pro externí nástroje) a zároveň posílá
+    markery do IPC fronty marker_queue -> interní recorder je dostane
+    spolehlivě i kdyby LSL discovery selhalo.
     """
     from .lsl_acquisition import create_marker_outlet
     from .stimuli.paradigm_base import MotorImageryParadigm
@@ -52,7 +52,7 @@ def _start_paradigm_proc(pid: Optional[str], pname: Optional[str]) -> None:
     if pname:
         print(f"Patient: {pname} (id={pid})")
     marker_outlet = create_marker_outlet(cfg)
-    paradigm = MotorImageryParadigm(cfg, marker_outlet)
+    paradigm = MotorImageryParadigm(cfg, marker_outlet, marker_queue=marker_queue)
     paradigm.run()
 
 
@@ -1290,12 +1290,17 @@ def _run_selection(selection: GuiSelection) -> None:
             f"timeout={cfg.lsl.resolution_timeout}s"
         )
 
-        recorder = EegRecorder(cfg)
+        # IPC fronta pro spolehlive predani markeru z paradigma procesu
+        # do recorderu (nezavisle na LSL marker discovery).
+        from multiprocessing import Queue as _MpQueue
+        marker_queue = _MpQueue()
+
+        recorder = EegRecorder(cfg, marker_queue=marker_queue)
         recorder.start()
 
         proc = Process(
             target=_start_paradigm_proc,
-            args=(selection.patient_profile_id, selection.patient_profile_name),
+            args=(selection.patient_profile_id, selection.patient_profile_name, marker_queue),
         )
         proc.start()
         proc.join()

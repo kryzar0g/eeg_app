@@ -49,20 +49,34 @@ _ARROW_VERTICES = [
 class Paradigm(ABC):
     """Abstract base class for EEG paradigms."""
 
-    def __init__(self, config: AppConfig, marker_outlet: StreamOutlet) -> None:
+    def __init__(self, config: AppConfig, marker_outlet: StreamOutlet,
+                 marker_queue=None) -> None:
         self.config = config
         self.marker_outlet = marker_outlet
+        # IPC fronta do interniho recorderu (zaloha k LSL marker streamu)
+        self.marker_queue = marker_queue
 
     @abstractmethod
     def run(self) -> None:
         ...
 
+    def _emit_marker(self, code: int) -> None:
+        """Posle marker pres LSL (pro externi nastroje) i IPC frontu (interni recorder)."""
+        from ..lsl_acquisition import push_marker
+        push_marker(self.marker_outlet, str(code))
+        if self.marker_queue is not None:
+            try:
+                self.marker_queue.put_nowait(int(code))   # neblokujici
+            except Exception:
+                pass
+
 
 class MotorImageryParadigm(Paradigm):
     """4-tridni motoricka imaginace s arrow cue a oddelenou imaginaci."""
 
-    def __init__(self, config: AppConfig, marker_outlet: StreamOutlet) -> None:
-        super().__init__(config, marker_outlet)
+    def __init__(self, config: AppConfig, marker_outlet: StreamOutlet,
+                 marker_queue=None) -> None:
+        super().__init__(config, marker_outlet, marker_queue)
 
         try:
             from psychopy import core, event, visual
@@ -226,7 +240,6 @@ class MotorImageryParadigm(Paradigm):
         imagery_dur = exp.imagery_duration
         iti = exp.iti_duration
 
-        from ..lsl_acquisition import push_marker
         clock = self.core.Clock()
         trial_num = 0
 
@@ -263,7 +276,7 @@ class MotorImageryParadigm(Paradigm):
                 # ── 3. Imagery: sipka ZMIZI, marker ZDE ──────────────
                 # Marker se posila prave ted = zacatek ciste imaginace.
                 if self.separate:
-                    push_marker(self.marker_outlet, str(code))
+                    self._emit_marker(code)
                     clock.reset()
                     while clock.getTime() < imagery_dur:
                         if self._check_escape():
@@ -271,7 +284,8 @@ class MotorImageryParadigm(Paradigm):
                         self.fixation.draw()   # pouze kriz, zadna sipka
                         self.win.flip()
                 else:
-                    # Stary rezim: marker uz na cue (zpetna kompatibilita)
+                    # Legacy rezim bez oddeleni - marker take na zacatku imaginace
+                    self._emit_marker(code)
                     clock.reset()
                     while clock.getTime() < imagery_dur:
                         if self._check_escape():

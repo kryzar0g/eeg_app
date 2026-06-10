@@ -31,12 +31,17 @@ class EegRecorder:
         saved = recorder.stop()   # uloží FIF a vrátí Path
     """
 
-    def __init__(self, config: AppConfig, output_dir: Optional[Path] = None) -> None:
+    def __init__(self, config: AppConfig, output_dir: Optional[Path] = None,
+                 marker_queue=None) -> None:
         self.config = config
         if output_dir is None:
             output_dir = PROJECT_ROOT / "data" / "recordings"
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Volitelna IPC fronta - paradigma do ni posila markery primo
+        # (zaloha pro pripad ze LSL marker discovery selze v sitovem setupu).
+        self._marker_queue = marker_queue
 
         self._data_chunks: List[np.ndarray] = []
         # Markery ukladame jako (sample_index, code) = poradi EEG vzorku v dobe
@@ -102,20 +107,47 @@ class EegRecorder:
         )
         self._eeg_thread.start()
 
-        # Marker stream – spustit retry vlakno.
-        # Paradigma (marker outlet) se spusti AZ po recorder.start(),
-        # proto retry smycka hleda stream opakovane az 60 sekund.
-        self._marker_thread = threading.Thread(
-            target=self._marker_connect_and_loop,
-            daemon=True,
-            name="eeg-recorder-markers",
-        )
+        # Markery: pokud je k dispozici IPC fronta (interni zaznam s nasim
+        # paradigmatem), pouzij JI jako primarni - je spolehlivejsi nez LSL
+        # discovery v sitovem setupu. Jinak pouzij LSL marker stream.
+        if self._marker_queue is not None:
+            self._marker_thread = threading.Thread(
+                target=self._marker_queue_loop, daemon=True, name="eeg-recorder-queue",
+            )
+            logger.info("EegRecorder: markery pres IPC frontu (primo z paradigmatu)")
+        else:
+            self._marker_thread = threading.Thread(
+                target=self._marker_connect_and_loop, daemon=True, name="eeg-recorder-markers",
+            )
+            logger.info("EegRecorder: markery pres LSL stream")
         self._marker_thread.start()
 
         logger.info(
             "EegRecorder: nahravani spusteno (%d kanalu @ %.0f Hz, vystup: %s)",
             n_ch, self._sfreq, self.output_dir,
         )
+
+    def _marker_queue_loop(self) -> None:
+        """Drenuje IPC frontu s markery z paradigma procesu (zaloha k LSL).
+
+        Pozici markeru urcuje podle aktualniho poctu EEG vzorku - stejne
+        jako LSL cesta. Deduplikace: pokud uz LSL marker prisel v podobnem
+        case, nevadi - find_events stejne zaznamena jen prvni hodnotu pulsu.
+        """
+        import queue as _queue
+        seen = 0
+        while self._running:
+            try:
+                code = self._marker_queue.get(timeout=0.1)
+            except (_queue.Empty, Exception):
+                continue
+            if code is None:
+                continue
+            sample_idx = int(self._eeg_sample_count)
+            self._marker_events.append((sample_idx, str(code)))
+            seen += 1
+            logger.info("EegRecorder: marker(IPC) %r @ EEG vzorek %d", code, sample_idx)
+        logger.info("EegRecorder: IPC marker smycka ukoncena, prijato %d", seen)
 
     def stop(self, patient_name: str = "pacient") -> Optional[Path]:
         """Zastaví nahrávání a uloží FIF soubor.
