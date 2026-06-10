@@ -316,46 +316,44 @@ class EegRecorder:
         return raw
 
     def _save_edf(self, patient_name: str) -> Optional[Path]:
-        """Uloží záznam jako BDF soubor (primárně) nebo EDF.
+        """Uloží záznam jako BDF s pravymi BDF+ anotacemi.
 
         Pořadí pokusů:
-          1. BDF přímý zápis (čistý Python, bez edfio) — vždy funguje
-          2. EDF přes mne.export (vyžaduje edfio) — záloha
-          3. FIF přes mne.save — poslední záloha
+          1. BDF+ s anotacemi pres edfio (markery jako anotace - PRIMARNI)
+          2. BDF s Status kanalem (cisty Python, bez edfio) - zaloha
+          3. FIF pres mne.save - posledni zaloha
         """
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = "".join(
             c if c.isalnum() or c in "_-" else "_" for c in patient_name
         )
 
-        # ── 1. Primární: BDF (přímý zápis, bez závislostí) ──────────
+        # ── 1. Primární: BDF+ s anotacemi (edfio) ───────────────────
         fname_bdf = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.bdf"
+        try:
+            self._write_bdf_annotations(fname_bdf)
+            self.saved_path = fname_bdf
+            logger.info(f"EegRecorder: uloženo jako BDF+ s anotacemi → {fname_bdf}")
+            self._save_markers_csv(fname_bdf)
+            return fname_bdf
+        except Exception as exc:
+            logger.warning(
+                "EegRecorder: BDF+ anotace selhaly (%s), zkousim Status-kanal BDF...", exc
+            )
+
+        # ── 1b. Záloha: BDF se Status kanalem (bez edfio) ───────────
         try:
             self._write_bdf(fname_bdf, patient_name=patient_name)
             self.saved_path = fname_bdf
-            logger.info(f"EegRecorder: uloženo jako BDF → {fname_bdf}")
+            logger.info(f"EegRecorder: uloženo jako BDF (Status kanal) → {fname_bdf}")
             self._save_markers_csv(fname_bdf)
             return fname_bdf
         except Exception as bdf_exc:
-            logger.warning(f"EegRecorder: BDF zápis selhal ({bdf_exc}), zkouším EDF...")
+            logger.warning(f"EegRecorder: BDF zápis selhal ({bdf_exc}), ukladam FIF...")
 
-        # ── 2. Záloha: EDF přes MNE (vyžaduje edfio) ────────────────
-        fname_edf = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.edf"
-        try:
-            import mne
-            raw = self._build_raw()
-            mne.export.export_raw(str(fname_edf), raw, fmt="edf", overwrite=True, verbose="ERROR")
-            self.saved_path = fname_edf
-            logger.info(f"EegRecorder: uloženo jako EDF → {fname_edf}")
-            self._save_markers_csv(fname_edf)
-            return fname_edf
-        except Exception as edf_exc:
-            logger.warning(f"EegRecorder: EDF export selhal ({edf_exc}), ukládám FIF...")
-
-        # ── 3. Poslední záloha: FIF ──────────────────────────────────
+        # ── 2. Poslední záloha: FIF (s MNE anotacemi) ───────────────
         fname_fif = self.output_dir / f"eeg_{safe_name}_{timestamp_str}_raw.fif"
         try:
-            import mne
             raw = self._build_raw()
             raw.save(str(fname_fif), overwrite=True, verbose="ERROR")
             self.saved_path = fname_fif
@@ -368,6 +366,61 @@ class EegRecorder:
 
     # Zpětná kompatibilita
     _save_fif = _save_edf
+
+    def _write_bdf_annotations(self, path: Path) -> None:
+        """Zapíše BDF+ s pravymi anotacemi (markery) pres edfio.
+
+        Markery jsou ulozeny jako BDF+ anotace -> MNE je nacte do
+        raw.annotations a EDFbrowser je zobrazi jako anotace.
+        Vyzaduje balik edfio.
+        """
+        from edfio import Bdf, BdfSignal, EdfAnnotation
+
+        all_data = np.vstack(self._data_chunks)   # (n_samples, n_eeg)
+        n_samples, n_eeg = all_data.shape
+
+        # Detekce jednotek: data ve V -> prevest na uV (viz _write_bdf)
+        data_abs_max = float(np.abs(all_data).max()) if all_data.size else 1.0
+        if data_abs_max < 0.1:
+            eeg_uv = all_data * 1e6
+        else:
+            eeg_uv = all_data
+        p_abs = max(float(np.abs(eeg_uv).max()) * 1.2, 100.0)
+
+        ch_names = self._ch_names if self._ch_names else [f"CH{i+1}" for i in range(n_eeg)]
+
+        def _lbl(name: str) -> str:
+            safe = "".join(c for c in name if c.isascii() and c.isprintable())
+            return (safe[:16] or "CH")
+
+        signals = [
+            BdfSignal(
+                eeg_uv[:, i].astype(np.float64),
+                sampling_frequency=self._sfreq,
+                label=_lbl(ch_names[i]),
+                physical_dimension="uV",
+                physical_range=(-p_abs, p_abs),
+            )
+            for i in range(n_eeg)
+        ]
+
+        # Markery -> BDF+ anotace (onset = sample_index / sfreq)
+        imagery_dur = float(self.config.experiment.imagery_duration)
+        annotations = [
+            EdfAnnotation(
+                onset=max(0.0, float(sample_idx) / self._sfreq),
+                duration=imagery_dur,
+                text=str(code),
+            )
+            for sample_idx, code in self._marker_events
+        ]
+
+        bdf = Bdf(signals, annotations=annotations, data_record_duration=1.0)
+        bdf.write(str(path))
+        logger.info(
+            "EegRecorder: BDF+ zapsano (%d kanalu, %d anotaci)",
+            n_eeg, len(annotations),
+        )
 
     def _write_bdf(self, path: Path, patient_name: str = "X") -> None:
         """Zapíše data přímo do BDF souboru bez externích závislostí.

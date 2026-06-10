@@ -147,6 +147,7 @@ def build():
         "--hidden-import", "mne.io.edf",
         "--hidden-import", "mne.export",
         "--hidden-import", "edfio",
+        "--collect-submodules", "edfio",
         "--hidden-import", "sklearn.utils._cython_blas",
         "--hidden-import", "sklearn.neighbors._typedefs",
         "--hidden-import", "sklearn.tree._utils",
