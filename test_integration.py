@@ -46,7 +46,7 @@ for label, code in trials:
     if code == 2: data[ci['C3'], m:e] -= mu[m:e]*0.8    # prava ruka
     elif code == 1: data[ci['C4'], m:e] -= mu[m:e]*0.8  # leva ruka
     elif code == 3: data[ci['Cz'], m:e] -= mu[m:e]*0.8  # nohy
-    markers.append((m/sfreq, str(code)))
+    markers.append((m, str(code)))   # sample index
     s += int(trial*sfreq)
 
 with tempfile.TemporaryDirectory() as tmp:

@@ -37,10 +37,12 @@ with tempfile.TemporaryDirectory() as tmp:
     chunk = rng.standard_normal((n_samples, n_ch)) * 20e-6  # 20 uV v [V]
     rec._data_chunks = [chunk]
 
-    # 4 tridy markeru
+    # 4 tridy markeru - nove jako sample indexy (sekundy * sfreq)
     rec._marker_events = [
-        (1.0, '1'), (2.5, '2'), (4.0, '3'), (5.5, '4'),
-        (6.0, '1'), (7.0, '2'), (8.0, '3'), (8.5, '4'),
+        (int(s * sfreq), c) for s, c in [
+            (1.0, '1'), (2.5, '2'), (4.0, '3'), (5.5, '4'),
+            (6.0, '1'), (7.0, '2'), (8.0, '3'), (8.5, '4'),
+        ]
     ]
 
     # --- Ulozit ---

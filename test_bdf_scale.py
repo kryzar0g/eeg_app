@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory() as tmp:
         rec._first_timestamp = 0.0
         rng = np.random.default_rng(42)
         rec._data_chunks = [rng.standard_normal((2500, 4)) * data_scale]
-        rec._marker_events = [(1.0,'1'), (3.0,'2'), (5.0,'3'), (7.0,'4')]
+        rec._marker_events = [(int(s*250.0), c) for s, c in [(1.0,'1'),(3.0,'2'),(5.0,'3'),(7.0,'4')]]
         path = rec._save_edf('test')
 
         if path.suffix == '.bdf':

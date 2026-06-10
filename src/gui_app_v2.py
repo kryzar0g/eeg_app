@@ -1302,8 +1302,18 @@ def _run_selection(selection: GuiSelection) -> None:
 
         saved_path = recorder.stop(patient_name=patient_name)
         if saved_path:
+            n_markers = len(getattr(recorder, "_marker_events", []))
             print(f"\nEEG zaznam ulozen: {saved_path}")
-            print("   Pro trenovani: Train Model -> vyberte tento soubor")
+            print(f"   Zachyceno markeru: {n_markers}")
+            if n_markers == 0:
+                print(
+                    "   VAROVANI: ZADNE markery! Trenink nebude fungovat.\n"
+                    "   Pricina: marker stream z paradigmatu nebyl zachycen.\n"
+                    "   -> Zkontrolujte ze se okno paradigmatu skutecne spustilo\n"
+                    "      a probehl alespon jeden trial (sipka + imaginace)."
+                )
+            else:
+                print("   Pro trenovani: Trenink + ERD -> vyberte tento soubor")
         else:
             print(
                 "\nVAROVANI: Interni nahravani nebylo dostupne (zadny LSL stream).\n"

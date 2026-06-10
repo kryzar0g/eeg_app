@@ -39,7 +39,11 @@ class EegRecorder:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._data_chunks: List[np.ndarray] = []
-        self._marker_events: List[Tuple[float, str]] = []  # (lsl_timestamp, marker_code)
+        # Markery ukladame jako (sample_index, code) = poradi EEG vzorku v dobe
+        # prijeti markeru. Tim se vyhneme problemu s ruznymi LSL hodinami,
+        # kdyz EEG prichazi ze vzdaleneho PC a markery z lokalniho paradigmatu.
+        self._marker_events: List[Tuple[int, str]] = []  # (eeg_sample_index, code)
+        self._eeg_sample_count: int = 0  # pocet dosud prijatych EEG vzorku
         self._first_timestamp: Optional[float] = None
         self._sfreq: float = float(config.preprocessing.sfreq)
         self._ch_names: List[str] = []
@@ -150,6 +154,8 @@ class EegRecorder:
             if self._first_timestamp is None and timestamps.size > 0:
                 self._first_timestamp = float(timestamps[0])
             self._data_chunks.append(chunk)  # (n_samples, n_channels)
+            # Aktualizovat citac vzorku (pro zarovnani markeru bez hodin)
+            self._eeg_sample_count += int(chunk.shape[0])
 
         logger.debug("EegRecorder: EEG smyčka ukončena")
 
@@ -183,18 +189,28 @@ class EegRecorder:
         self._marker_loop()
 
     def _marker_loop(self) -> None:
-        """Přijímá markery z LSL (volá se po nalezení streamu)."""
+        """Přijímá markery z LSL (volá se po nalezení streamu).
+
+        Pozici markeru urcujeme podle aktualniho poctu prijatych EEG vzorku
+        (_eeg_sample_count), NE podle LSL timestampu. Tim se vyhneme problemu
+        s ruznymi hodinami, kdyz EEG prichazi ze vzdaleneho PC a markery
+        z lokalniho paradigmatu.
+        """
+        n_received = 0
         while self._running:
             try:
                 sample, timestamp = self._marker_inlet.pull_sample(timeout=0.1)
                 if sample and timestamp is not None:
                     marker_code = str(sample[0])
-                    self._marker_events.append((float(timestamp), marker_code))
-                    logger.debug("EegRecorder: marker %r @ t=%.3f", marker_code, timestamp)
+                    sample_idx = int(self._eeg_sample_count)  # snapshot poctu EEG vzorku
+                    self._marker_events.append((sample_idx, marker_code))
+                    n_received += 1
+                    logger.info("EegRecorder: marker %r @ EEG vzorek %d (celkem %d)",
+                                marker_code, sample_idx, n_received)
             except Exception as exc:
                 logger.debug("EegRecorder: chyba cteni markeru: %s", exc)
 
-        logger.debug("EegRecorder: marker smycka ukoncena")
+        logger.info("EegRecorder: marker smycka ukoncena, prijato %d markeru", n_received)
 
     # ─── Ukládání ─────────────────────────────────────────────────────────────
 
@@ -212,11 +228,12 @@ class EegRecorder:
         )
         raw = mne.io.RawArray(data_t, info, verbose="ERROR")
 
-        # Vložit markery jako EDF+ anotace
-        if self._marker_events and self._first_timestamp is not None:
+        # Vložit markery jako EDF+ anotace.
+        # marker_events obsahuje (sample_index, code) -> onset = index / sfreq
+        if self._marker_events:
             onsets = [
-                max(0.0, ts - self._first_timestamp)
-                for ts, _ in self._marker_events
+                max(0.0, float(sample_idx) / self._sfreq)
+                for sample_idx, _ in self._marker_events
             ]
             durations = [float(self.config.experiment.imagery_duration)] * len(self._marker_events)
             descriptions = [code for _, code in self._marker_events]
@@ -320,15 +337,18 @@ class EegRecorder:
         if pad > 0:
             all_data = np.vstack([all_data, np.zeros((pad, n_eeg))])
 
-        # Sestavit Status kanál: 0 všude, markery na správných vzorcích
+        # Sestavit Status kanál: 0 všude, markery na správných vzorcích.
+        # marker_events = (sample_index, code) -> primo index do status kanalu.
         status_ch = np.zeros(n_records * samples_per_record, dtype=np.int32)
-        if self._marker_events and self._first_timestamp is not None:
-            for ts, code in self._marker_events:
-                onset_sec = max(0.0, ts - self._first_timestamp)
-                sample_idx = int(round(onset_sec * sfreq))
-                if 0 <= sample_idx < len(status_ch):
+        if self._marker_events:
+            # Marker drzime po dobu nekolika vzorku, aby ho find_events spolehlive
+            # zachytil i pri filtraci (sirka pulsu ~ 10 vzorku).
+            pulse_width = max(2, int(round(0.02 * sfreq)))  # ~20 ms
+            for sample_idx, code in self._marker_events:
+                idx = int(sample_idx)
+                if 0 <= idx < len(status_ch):
                     try:
-                        status_ch[sample_idx] = int(code)
+                        status_ch[idx:idx + pulse_width] = int(code)
                     except (ValueError, OverflowError):
                         pass
 
@@ -460,7 +480,7 @@ class EegRecorder:
 
     def _save_markers_csv(self, eeg_path: Path) -> None:
         """Uloží markery jako CSV kompatibilní s mode='csv' v offline_analysis."""
-        if not self._marker_events or self._first_timestamp is None:
+        if not self._marker_events:
             return
         try:
             # Pozor: Path.with_suffix neumožňuje více teček → musíme použít string
@@ -468,8 +488,8 @@ class EegRecorder:
             imagery_dur = float(self.config.experiment.imagery_duration)
             with csv_path.open("w", encoding="utf-8") as f:
                 f.write("start;end;label\n")
-                for ts, code in self._marker_events:
-                    start_sec = max(0.0, ts - self._first_timestamp)
+                for sample_idx, code in self._marker_events:
+                    start_sec = max(0.0, float(sample_idx) / self._sfreq)
                     end_sec = start_sec + imagery_dur
                     f.write(f"{start_sec:.6f};{end_sec:.6f};{code}\n")
             logger.info(f"EegRecorder: markery CSV uloženy → {csv_path}")
