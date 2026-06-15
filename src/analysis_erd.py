@@ -159,27 +159,40 @@ def run_erd_analysis(
     sfreq = float(raw.info["sfreq"])
     ch_names = list(raw.info["ch_names"])
 
-    # ── Udalosti (markery) ────────────────────────────────────────────
-    events = None
-    event_id: Dict[str, int] = {}
-    if "Status" in ch_names:
-        try:
-            events = mne.find_events(raw, stim_channel="Status", shortest_event=1, verbose="ERROR")
-        except Exception:
-            events = None
-    if events is None or events.size == 0:
-        try:
-            events, ev_id = mne.events_from_annotations(raw, verbose="ERROR")
-            event_id = ev_id
-        except Exception:
-            events = np.empty((0, 3), dtype=int)
-
-    if events is None or events.size == 0:
-        raise RuntimeError("Zadne markery v souboru - nelze pocitat ERD.")
-
-    # ── Mapovani kod -> nazev tridy ───────────────────────────────────
+    # ── Udalosti (markery) -> seznam (onset_sample, label) ─────────────
+    from .offline_analysis import _annotation_desc_to_code
     class_map = config.paradigm.get("classes", {})
     code_to_label = {int(v): str(k) for k, v in class_map.items()}
+
+    trial_events: List[Tuple[int, str]] = []  # (onset_sample, label)
+
+    if "Status" in ch_names:
+        # Stary format: Status kanal s integer kody
+        try:
+            ev = mne.find_events(raw, stim_channel="Status", shortest_event=1, verbose="ERROR")
+            for e in ev:
+                trial_events.append((int(e[0]), code_to_label.get(int(e[2]), f"code_{int(e[2])}")))
+        except Exception:
+            pass
+
+    if not trial_events:
+        # Novy format: BDF+ anotace s citelnymi popisky
+        try:
+            ev, ann_id = mne.events_from_annotations(raw, verbose="ERROR")
+            int_to_label = {}
+            for desc, mne_int in ann_id.items():
+                code = _annotation_desc_to_code(desc, config)
+                if code is not None:
+                    int_to_label[mne_int] = code_to_label.get(code, str(desc))
+                # klid/nezname vynechame (KLID se do ERD nepocita)
+            for e in ev:
+                if int(e[2]) in int_to_label:
+                    trial_events.append((int(e[0]), int_to_label[int(e[2])]))
+        except Exception:
+            pass
+
+    if not trial_events:
+        raise RuntimeError("Zadne markery trid v souboru - nelze pocitat ERD.")
 
     # ── Motoricke kanaly ──────────────────────────────────────────────
     motor = _resolve_motor_channels(ch_names, analysis_cfg)
@@ -207,19 +220,7 @@ def run_erd_analysis(
     # Pro kazdou tridu sbirame ERD% per kanal/pasmo a koherenci
     per_class: Dict[str, Dict[str, List[float]]] = {}
 
-    for ev in events:
-        onset = int(ev[0])
-        code = int(ev[2])
-        label = code_to_label.get(code)
-        if label is None:
-            # Zkusit z anotacniho event_id (klic je retezec kodu)
-            for k, v in event_id.items():
-                if int(v) == code:
-                    label = code_to_label.get(int(k)) if k.isdigit() else k
-                    break
-        if label is None:
-            label = f"code_{code}"
-
+    for onset, label in trial_events:
         acc = per_class.setdefault(label, {
             "C3_mu": [], "C4_mu": [], "Cz_mu": [],
             "C3_beta": [], "C4_beta": [], "Cz_beta": [],

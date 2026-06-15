@@ -179,38 +179,88 @@ def _prepare_epochs_from_stim(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epo
   return epochs
 
 
-def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
-  """Epochy z MNE anotací – výstup interního EegRecorderu (FIF soubory).
+def _annotation_desc_to_code(desc: str, config: AppConfig):
+  """Mapuje popis anotace na kod tridy.
 
-  Anotace mají popis = kód třídy jako řetězec ("1", "2", …),
-  duration = imagery_duration. Epochy začínají na onset markeru.
+  Zvlada vsechny formaty popisu:
+    - cesky popisek z cue ("PRAVA RUKA" -> 2)
+    - klic tridy ("RIGHT_HAND" -> 2)
+    - holy kod ("2" -> 2)
+  Vraci None pokud popis neodpovida zadne tride (napr. "KLID").
+  """
+  classes = config.paradigm.get("classes", {})
+  cues = config.paradigm.get("cues", {})
+  d = str(desc).strip()
+
+  # 1. klic tridy
+  if d in classes:
+    return int(classes[d])
+  # 2. cesky cue popisek
+  for key, code in classes.items():
+    label = str(cues.get(key, {}).get("label", "")).strip()
+    if label and label == d:
+      return int(code)
+  # 3. holy kod
+  try:
+    code = int(float(d))
+    if code in {int(v) for v in classes.values()}:
+      return code
+  except (ValueError, TypeError):
+    pass
+  return None
+
+
+def _prepare_epochs_from_annotations(raw: mne.io.BaseRaw, config: AppConfig) -> mne.Epochs:
+  """Epochy z MNE anotací (vystup interniho EegRecorderu).
+
+  Popis anotace muze byt cesky ("PRAVA RUKA"), klic tridy ("RIGHT_HAND")
+  nebo kod ("2"). Klidove anotace ("KLID") se pro 4-tridni trenink
+  vynechavaji.
   """
   events_cfg = config.events
   tmin = float(events_cfg.get("tmin", 0.0))
-  # tmax: explicitní z config, nebo imagery_duration jako záloha
   tmax_cfg = events_cfg.get("tmax", None)
   tmax = float(tmax_cfg) if tmax_cfg is not None else float(config.experiment.imagery_duration)
 
-  events, event_id = mne.events_from_annotations(raw, verbose="ERROR")
+  events, ann_event_id = mne.events_from_annotations(raw, verbose="ERROR")
   if events.size == 0:
     raise RuntimeError(
-      "FIF soubor neobsahuje žádné anotace/markery. "
-      "Zkontrolujte, zda byl záznam pořízený interním EegRecorderem, "
-      "nebo přepněte na mode: stim / csv v config.yaml."
+      "Soubor neobsahuje žádné anotace/markery. "
+      "Zkontrolujte, zda byl záznam pořízen interním EegRecorderem."
     )
 
-  logger.info(f"Anotace nalezeny: {event_id}")
+  # MNE priradila kazdemu popisu integer (ann_event_id: {popis: mne_int}).
+  # Premapujeme na skutecne kody trid a vynechame klid/nezname.
+  classes = config.paradigm.get("classes", {})
+  code_to_key = {int(c): k for k, c in classes.items()}
+  mneint_to_classcode = {}
+  for desc, mne_int in ann_event_id.items():
+    cls_code = _annotation_desc_to_code(desc, config)
+    if cls_code is not None:
+      mneint_to_classcode[mne_int] = cls_code
+
+  if not mneint_to_classcode:
+    raise RuntimeError(
+      f"Anotace {list(ann_event_id.keys())} neodpovidaji zadne tride v config.yaml"
+    )
+
+  # Premapovat kody udalosti a vyfiltrovat jen tridy
+  kept = []
+  for ev in events:
+    if ev[2] in mneint_to_classcode:
+      kept.append([ev[0], 0, mneint_to_classcode[ev[2]]])
+  events_sel = np.asarray(kept, dtype=int)
+
+  present_codes = sorted({int(e[2]) for e in events_sel})
+  event_id = {code_to_key.get(c, str(c)): c for c in present_codes}
+
+  n_rest = len(events) - len(events_sel)
+  logger.info("Anotace -> tridy: %s  (vynechano klid/neznamych: %d)", event_id, n_rest)
 
   epochs = mne.Epochs(
-    raw,
-    events,
-    event_id=event_id,
-    tmin=tmin,
-    tmax=tmax,
-    baseline=None,
-    preload=True,
-    picks="eeg",
-    verbose="ERROR",
+    raw, events_sel, event_id=event_id,
+    tmin=tmin, tmax=tmax, baseline=None,
+    preload=True, picks="eeg", on_missing="warn", verbose="ERROR",
   )
   logger.info(f"Vytvoreno {len(epochs)} epoch z anotaci")
   return epochs

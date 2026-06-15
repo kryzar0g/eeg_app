@@ -301,8 +301,9 @@ class MotorImageryParadigm(Paradigm):
                         self.fixation.draw()
                         self.win.flip()
 
-                # ── 4. ITI: kratka pauza ─────────────────────────────
+                # ── 4. ITI: klid (marker kod 0 = KLID interval) ──────
                 self.rest_text.text = "klid"
+                self._emit_marker(0)   # klidovy interval do anotaci
                 clock.reset()
                 while clock.getTime() < iti:
                     if self._check_escape():

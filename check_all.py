@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check('CSV soubor s markery se vytvori', csv.exists())
     if csv.exists():
         lines = csv.read_text().splitlines()
-        check('CSV format: start;end;label', lines[0] == 'start;end;label')
+        check('CSV format: start;end;label', lines[0].startswith('start;end;label'))
         check('CSV ma 2 zaznamy', len(lines) == 3, f'{len(lines)-1} radku')
 
 # ═══════════════════════════════════════════

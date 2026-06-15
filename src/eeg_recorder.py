@@ -367,6 +367,21 @@ class EegRecorder:
     # Zpětná kompatibilita
     _save_fif = _save_edf
 
+    def _code_to_description(self) -> dict:
+        """Mapa kod tridy -> citelny popisek pro anotace.
+
+        Pouzije cesky popisek z paradigm.cues (napr. 'PRAVA RUKA').
+        Kod 0 = klidovy interval -> 'KLID'.
+        """
+        classes = self.config.paradigm.get("classes", {})
+        cues = self.config.paradigm.get("cues", {})
+        mapping = {}
+        for key, code in classes.items():
+            label = str(cues.get(key, {}).get("label", key)).strip()
+            mapping[int(code)] = label or str(key)
+        mapping[0] = "KLID"
+        return mapping
+
     def _write_bdf_annotations(self, path: Path) -> None:
         """Zapíše BDF+ s pravymi anotacemi (markery) pres edfio.
 
@@ -404,13 +419,15 @@ class EegRecorder:
             for i in range(n_eeg)
         ]
 
-        # Markery -> BDF+ anotace (onset = sample_index / sfreq)
+        # Markery -> BDF+ anotace s citelnym popiskem (PRAVA RUKA, KLID...)
         imagery_dur = float(self.config.experiment.imagery_duration)
+        iti_dur = float(getattr(self.config.experiment, "iti_duration", 1.5))
+        code_to_desc = self._code_to_description()
         annotations = [
             EdfAnnotation(
                 onset=max(0.0, float(sample_idx) / self._sfreq),
-                duration=imagery_dur,
-                text=str(code),
+                duration=(iti_dur if int(code) == 0 else imagery_dur),
+                text=code_to_desc.get(int(code), str(code)),
             )
             for sample_idx, code in self._marker_events
         ]
@@ -455,24 +472,29 @@ class EegRecorder:
 
         # ── Sestavit TAL anotace pro kazdy zaznam ────────────────────
         imagery_dur = float(self.config.experiment.imagery_duration)
-        # markery rozdelit do zaznamu podle onsetu
+        iti_dur = float(getattr(self.config.experiment, "iti_duration", 1.5))
+        code_to_desc = self._code_to_description()
+
+        # markery rozdelit do zaznamu podle onsetu; popis = citelny nazev,
+        # delka = imagery_dur (klid 'KLID' kod 0 ma delku iti)
         markers_by_rec: dict = {}
         for sample_idx, code in self._marker_events:
             onset = float(sample_idx) / sfreq
             rec_idx = int(onset // record_dur_sec)
-            markers_by_rec.setdefault(rec_idx, []).append((onset, code))
+            desc = code_to_desc.get(int(code), str(code))
+            dur = iti_dur if int(code) == 0 else imagery_dur
+            markers_by_rec.setdefault(rec_idx, []).append((onset, dur, desc))
 
         def _num(x: float) -> bytes:
-            # cislo bez zbytecnych nul: 1.0->"1", 12.5->"12.5"
             s = ("%f" % x).rstrip("0").rstrip(".")
             return (s if s else "0").encode("ascii")
 
         def _tal_for_record(rec_idx: int) -> bytes:
             # timekeeping TAL (povinny prvni v kazdem zaznamu)
             tal = b"+" + _num(rec_idx * record_dur_sec) + b"\x14\x14\x00"
-            for onset, code in markers_by_rec.get(rec_idx, []):
-                tal += (b"+" + _num(onset) + b"\x15" + _num(imagery_dur)
-                        + b"\x14" + str(code).encode("ascii") + b"\x14\x00")
+            for onset, dur, desc in markers_by_rec.get(rec_idx, []):
+                tal += (b"+" + _num(onset) + b"\x15" + _num(dur)
+                        + b"\x14" + str(desc).encode("ascii", "replace") + b"\x14\x00")
             return tal
 
         # Velikost annotation kanalu: nejdelsi TAL blok + rezerva
@@ -578,19 +600,21 @@ class EegRecorder:
         )
 
     def _save_markers_csv(self, eeg_path: Path) -> None:
-        """Uloží markery jako CSV kompatibilní s mode='csv' v offline_analysis."""
+        """Uloží markery jako CSV s citelnym popiskem (start;end;label;code)."""
         if not self._marker_events:
             return
         try:
-            # Pozor: Path.with_suffix neumožňuje více teček → musíme použít string
             csv_path = eeg_path.parent / (eeg_path.stem + ".markers.csv")
             imagery_dur = float(self.config.experiment.imagery_duration)
+            iti_dur = float(getattr(self.config.experiment, "iti_duration", 1.5))
+            code_to_desc = self._code_to_description()
             with csv_path.open("w", encoding="utf-8") as f:
-                f.write("start;end;label\n")
+                f.write("start;end;label;code\n")
                 for sample_idx, code in self._marker_events:
                     start_sec = max(0.0, float(sample_idx) / self._sfreq)
-                    end_sec = start_sec + imagery_dur
-                    f.write(f"{start_sec:.6f};{end_sec:.6f};{code}\n")
+                    dur = iti_dur if int(code) == 0 else imagery_dur
+                    desc = code_to_desc.get(int(code), str(code))
+                    f.write(f"{start_sec:.6f};{start_sec + dur:.6f};{desc};{code}\n")
             logger.info(f"EegRecorder: markery CSV uloženy → {csv_path}")
         except Exception as exc:
             logger.warning(f"EegRecorder: nelze uložit markers CSV: {exc}")

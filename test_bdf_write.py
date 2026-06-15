@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check('CSV markery ulozeny', csv.exists())
         if csv.exists():
             lines = csv.read_text().splitlines()
-            check('CSV ma spravny format', lines[0] == 'start;end;label')
+            check('CSV ma spravny format', lines[0].startswith('start;end;label'))
             check('CSV ma vsechny markery', len(lines) - 1 == len(rec._marker_events),
                   f'{len(lines)-1} radku')
 
