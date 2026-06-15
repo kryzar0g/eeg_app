@@ -79,6 +79,15 @@ def run_online_bci(config: Optional[AppConfig] = None) -> None:
             "Falling back to bandpower features for online inference; retrain the model to use the new pipeline."
         )
 
+    # Pocet kanalu, na kterych byl model natrenovan (napr. 24 EEG bez Status kanalu).
+    # LSL stream casto posila 25 kanalu (24 EEG + Status); musime vybrat stejnych 24.
+    expected_n_channels: Optional[int] = None
+    if raw_epoch_pipeline:
+        prep = getattr(model, "named_steps", {}).get("preprocess")
+        expected_n_channels = getattr(prep, "n_channels_", None)
+    if expected_n_channels:
+        logger.info(f"Model ocekava {expected_n_channels} kanalu (online vybere prvnich tolik z LSL)")
+
     eeg_inlet = resolve_eeg_stream(config)
     class_names = _get_class_names(config)
 
@@ -117,8 +126,12 @@ def run_online_bci(config: Optional[AppConfig] = None) -> None:
                 continue
 
             all_data = np.vstack(buf_chunks)
-            epoch_data = all_data[-n_samples_epoch:]
-            epoch_arr = epoch_data[np.newaxis, :, :]
+            epoch_data = all_data[-n_samples_epoch:]          # (n_times, n_channels) z LSL
+            # Model ocekava (n_epochs, n_channels, n_times) -> transponovat osy
+            epoch_arr = epoch_data.T[np.newaxis, :, :]        # (1, n_channels, n_times)
+            # Orezat Status/extra kanaly na pocet, na kterem byl model trenovan
+            if expected_n_channels and epoch_arr.shape[1] > expected_n_channels:
+                epoch_arr = epoch_arr[:, :expected_n_channels, :]
 
             try:
                 if raw_epoch_pipeline:
