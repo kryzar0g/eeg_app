@@ -459,6 +459,66 @@ def _crop_epoch_array(
   return np.stack(windows, axis=0), np.asarray(labels, dtype=int)
 
 
+def _load_epochs_array(file_path: Path, config) -> Tuple[np.ndarray, np.ndarray, int]:
+  """Pomocná funkce: načte BDF, vytvoří epochy, resample, vrátí (X, y, n_epochs)."""
+  raw = _load_raw(file_path)
+  epochs = _prepare_epochs(raw, config)
+
+  target_sfreq = float(config.preprocessing.sfreq)
+  actual_sfreq = float(epochs.info["sfreq"])
+  if abs(actual_sfreq - target_sfreq) > 1.0:
+    logger.info(f"Resampling {actual_sfreq:.0f} Hz → {target_sfreq:.0f} Hz")
+    epochs = epochs.resample(target_sfreq, verbose=False)
+
+  return epochs.get_data(), epochs.events[:, 2].astype(int), len(epochs)
+
+
+def run_offline_from_files(file_path_strs: List[str]) -> Tuple[float, int]:
+  """Načte více BDF souborů, spojí jejich epochy a natrénuje model.
+
+  Umožňuje kombinovat více sezení (např. mereni1.bdf + mereni2.bdf)
+  pro zvýšení počtu trénovacích dat.
+  """
+  config = load_config()
+  all_X: List[np.ndarray] = []
+  all_y: List[np.ndarray] = []
+  total_epochs = 0
+
+  for path_str in file_path_strs:
+    file_path = Path(path_str).expanduser().resolve()
+    if not file_path.is_file():
+      raise FileNotFoundError(f"File not found: {file_path}")
+    logger.info(f"Loading EEG from {file_path}")
+    X, y, n = _load_epochs_array(file_path, config)
+    all_X.append(X)
+    all_y.append(y)
+    total_epochs += n
+    logger.info(f"  {file_path.name}: {n} epoch, třídy: {sorted(set(y.tolist()))}")
+
+  X_all = np.concatenate(all_X, axis=0)
+  y_all = np.concatenate(all_y, axis=0)
+  logger.info(f"Spojeno: {total_epochs} epoch celkem, tvar: {X_all.shape}")
+
+  sfreq = float(config.preprocessing.sfreq)
+  crop_samples = int(round(config.training.window_length_sec * sfreq))
+  step_samples = int(round(config.training.crop_step_sec * sfreq))
+  X_all, y_all = _crop_epoch_array(
+    X_all, y_all,
+    crop_samples=crop_samples,
+    step_samples=step_samples,
+    augment=bool(config.training.crop_enabled),
+  )
+
+  n_averages = int(getattr(config.experiment, "n_averages", 1))
+  if n_averages > 1:
+    X_all, y_all = _average_epochs(X_all, y_all, n_averages=n_averages)
+
+  logger.info(f"Epoch array shape: {X_all.shape}, classes: {len(np.unique(y_all))}")
+  logger.info("Training classifier pipeline...")
+  model, acc = train_and_evaluate(X_all, y_all, config=config, save_model=True)
+  return acc, total_epochs
+
+
 def run_offline_from_file(file_path_str: str) -> Tuple[float, int]:
   """Load EEG file, create epochs, and train the configured model pipeline."""
   config = load_config()
@@ -472,6 +532,14 @@ def run_offline_from_file(file_path_str: str) -> Tuple[float, int]:
 
   logger.info("Creating epochs...")
   epochs = _prepare_epochs(raw, config)
+
+  # Resample na cílový sfreq z configu, pokud se liší (např. 512 Hz → 250 Hz).
+  target_sfreq = float(config.preprocessing.sfreq)
+  actual_sfreq = float(epochs.info["sfreq"])
+  if abs(actual_sfreq - target_sfreq) > 1.0:
+    logger.info(f"Resampling {actual_sfreq:.0f} Hz → {target_sfreq:.0f} Hz")
+    epochs = epochs.resample(target_sfreq, verbose=False)
+
   X = epochs.get_data()
   y = epochs.events[:, 2].astype(int)
 

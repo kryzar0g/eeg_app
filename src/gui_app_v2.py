@@ -31,6 +31,7 @@ class GuiSelection:
     """User's mode and configuration selection."""
     mode: str
     offline_file: Optional[str] = None
+    offline_files: Optional[list] = None  # více souborů pro kombinovaný trénink
     patient_profile_id: Optional[str] = None
     patient_profile_name: Optional[str] = None
     # In-memory config z GUI – obsahuje zmeny z Network EEG zalozky
@@ -1067,13 +1068,15 @@ class EegAppGui:
     # ── EVENT HANDLERS ─────────────────────────────────────────────────────
     
     def _browse_file(self) -> None:
-        """Browse for EEG file."""
-        path = filedialog.askopenfilename(
-            title="Select EEG file",
+        """Browse for one or more EEG files."""
+        paths = filedialog.askopenfilenames(
+            title="Vyberte EEG soubor(y) (Ctrl+klik = více souborů)",
             filetypes=[("EEG files", "*.edf *.bdf"), ("All files", "*.*")],
         )
-        if path:
-            self._file_var.set(path)
+        if paths:
+            self._selected_files = list(paths)
+            label = paths[0] if len(paths) == 1 else f"{len(paths)} souborů: {', '.join(p.split('/')[-1] for p in paths)}"
+            self._file_var.set(label)
     
     def _on_start_record(self) -> None:
         """Start recording mode."""
@@ -1155,9 +1158,10 @@ class EegAppGui:
     def _on_start_offline(self) -> None:
         """Start offline training mode."""
         if not self._file_var.get():
-            messagebox.showerror("Chybi soubor", "Nejprve vyberte EEG soubor (BDF/EDF/FIF).")
+            messagebox.showerror("Chybi soubor", "Nejprve vyberte EEG soubor(y) (BDF/EDF/FIF).")
             return
-        selection = GuiSelection(mode="offline", offline_file=self._file_var.get(), config=self._config)
+        files = getattr(self, "_selected_files", None) or [self._file_var.get()]
+        selection = GuiSelection(mode="offline", offline_files=files, config=self._config)
         self._start_task(selection)
 
     def _on_start_erd(self) -> None:
@@ -1262,12 +1266,12 @@ class EegAppGui:
                     parent=self._root,
                 )
                 if do_train:
-                    path = filedialog.askopenfilename(
-                        title="Select EEG file for training",
+                    paths = filedialog.askopenfilenames(
+                        title="Vyberte EEG soubor(y) pro trénink (Ctrl+klik = více souborů)",
                         filetypes=[("EEG files", "*.edf *.bdf"), ("All files", "*.*")],
                     )
-                    if path:
-                        selection = GuiSelection(mode="offline", offline_file=path)
+                    if paths:
+                        selection = GuiSelection(mode="offline", offline_files=list(paths))
                         self._start_task(selection)
         except Exception:
             logger.exception("Error offering train-after-record flow")
@@ -1331,13 +1335,20 @@ def _run_selection(selection: GuiSelection) -> None:
             )
 
     elif selection.mode == "offline":
-        from .offline_analysis import run_offline_from_file
+        from .offline_analysis import run_offline_from_file, run_offline_from_files
 
-        if not selection.offline_file:
+        files = selection.offline_files if selection.offline_files else (
+            [selection.offline_file] if selection.offline_file else []
+        )
+        if not files:
             raise ValueError("No EEG file selected")
 
-        acc, n_epochs = run_offline_from_file(selection.offline_file)
-        print(f"\nTrenovani dokonceno: {n_epochs} epoch, presnost: {acc:.4f}")
+        if len(files) == 1:
+            acc, n_epochs = run_offline_from_file(files[0])
+        else:
+            print(f"Kombinuji {len(files)} soubor(u)...")
+            acc, n_epochs = run_offline_from_files(files)
+        print(f"\nTrenovani dokonceno: {n_epochs} epoch, presnost: {acc*100:.1f}%")
 
     elif selection.mode == "erd":
         from .analysis_erd import run_erd_analysis
