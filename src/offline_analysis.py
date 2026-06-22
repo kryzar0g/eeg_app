@@ -35,7 +35,7 @@ def _load_raw(file_path: Path) -> mne.io.BaseRaw:
     elif suffix == ".bdf":
       raw = mne.io.read_raw_bdf(file_path, preload=preload, verbose="ERROR")
     else:  # .fif – výstup interního EegRecorderu
-      raw = mne.io.read_raw_fif(file_path, preload=True, verbose="ERROR")
+      raw = mne.io.read_raw_fif(file_path, preload=preload, verbose="ERROR")
 
     n_ch = len(raw.ch_names)  # raw.n_channels neexistuje ve starších verzích MNE
     n_times = raw.n_times if hasattr(raw, "n_times") else raw.last_samp - raw.first_samp + 1

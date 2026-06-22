@@ -187,7 +187,12 @@ class MotorImageryParadigm(Paradigm):
         if n_averages > 1:
             blocks = []
             for label, code in self.class_map.items():
-                n_blocks = max(1, n_per_class // n_averages)
+                if n_per_class % n_averages != 0:
+                    raise ValueError(
+                        "experiment.trials_per_class must be divisible by experiment.n_averages "
+                        "when averaging mode is enabled"
+                    )
+                n_blocks = n_per_class // n_averages
                 for _ in range(n_blocks):
                     blocks.append([
                         {"label": str(label), "code": int(code)}
